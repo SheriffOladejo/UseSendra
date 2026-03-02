@@ -1,0 +1,60 @@
+{
+  "name": "@aptos-labs/wallet-adapter-ant-design",
+  "version": "5.3.2",
+  "description": "Aptos Wallet Adapter ant-design",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "license": "Apache-2.0",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "require": "./dist/index.js",
+      "import": "./dist/index.mjs"
+    },
+    "./dist/index.css": {
+      "import": "./dist/index.css",
+      "require": "./dist/index.css"
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aptos-labs/aptos-wallet-adapter.git"
+  },
+  "homepage": "https://github.com/aptos-labs/aptos-wallet-adapter",
+  "bugs": {
+    "url": "https://github.com/aptos-labs/aptos-wallet-adapter/issues"
+  },
+  "author": "aptoslabs.com",
+  "keywords": [
+    "Aptos",
+    "Aptos Labs",
+    "Wallet",
+    "Wallet Adapter",
+    "Wallet Adapter Provider",
+    "React"
+  ],
+  "scripts": {
+    "build": "tsup src/index.tsx --format esm,cjs --dts --external react",
+    "dev": "tsup src/index.tsx --format esm,cjs --watch --dts --external react",
+    "clean": "rm -rf .turbo && rm -rf node_modules && rm -rf dist",
+    "lint": "TIMING=1 eslint \"src/**/*.ts*\""
+  },
+  "devDependencies": {
+    "@aptos-labs/wallet-adapter-tsconfig": "workspace:*",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "eslint": "^8.57.1",
+    "tsup": "^8.4.0",
+    "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "@ant-design/icons": "^5.3.7",
+    "@aptos-labs/wallet-adapter-react": "workspace:*",
+    "antd": "^5.18.3"
+  },
+  "peerDependencies": {
+    "react": "^18.0.0 || ^19.0.0",
+    "react-dom": "^18.0.0 || ^19.0.0"
+  }
+}

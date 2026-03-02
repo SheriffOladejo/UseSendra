@@ -1,0 +1,10 @@
+[2026-02-13 19:40:06] === Aptos Indexer Webhook Started ===
+[2026-02-13 19:40:06] Last processed version: 0
+[2026-02-13 19:40:06] Querying Aptos Indexer from version: 0
+[2026-02-13 19:40:17] HTTP Error: 408 - Response: {"errors":[{"message":"Request Timed Out: Upstream took longer than 10000ms to respond","extensions":{"code":"408"}}]}
+[2026-02-13 19:40:17] Failed to query Aptos Indexer
+[2026-02-13 19:40:26] === Aptos Indexer Webhook Started ===
+[2026-02-13 19:40:26] Last processed version: 0
+[2026-02-13 19:40:26] Querying Aptos Indexer from version: 0
+[2026-02-13 19:40:37] HTTP Error: 408 - Response: {"errors":[{"message":"Request Timed Out: Upstream took longer than 10000ms to respond","extensions":{"code":"408"}}]}
+[2026-02-13 19:40:37] Failed to query Aptos Indexer

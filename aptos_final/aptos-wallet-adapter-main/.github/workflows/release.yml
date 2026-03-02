@@ -1,0 +1,66 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency: ${{ github.workflow }}-${{ github.ref }}
+
+jobs:
+  build:
+    name: Build
+    permissions:
+      actions: write
+      pull-requests: write
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Authenticate as Aptos Labs Bot
+        uses: actions/create-github-app-token@v1
+        id: authenticate
+        with:
+          app-id: ${{ vars.APTOS_LABS_BOT_APP_ID }}
+          private-key: ${{ secrets.APTOS_LABS_BOT_APP_PRIVATE_KEY }}
+
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          registry-url: "https://registry.npmjs.org"
+
+      - uses: pnpm/action-setup@v4
+        name: Install pnpm
+        id: pnpm-install
+        with:
+          version: 9.15.5
+
+      - name: Install global dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build global project
+        env:
+          GAID: ${{ vars.APTOS_WALLET_ADAPTER_GAID }}
+        run: pnpm run build
+
+      - name: Create Release Pull Request or Publish to npm
+        id: changesets
+        uses: changesets/action@v1
+        with:
+          publish: pnpm run publish-packages
+        env:
+          GITHUB_TOKEN: ${{ steps.authenticate.outputs.token }}
+          NPM_TOKEN: ${{ secrets.APTOS_LABS_NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NEXT_PUBLIC_SWAP_CCTP_SPONSOR_ACCOUNT_PRIVATE_KEY: ${{ secrets.NEXT_PUBLIC_SWAP_CCTP_SPONSOR_ACCOUNT_PRIVATE_KEY }}
+          NEXT_PUBLIC_SWAP_CCTP_MAIN_SIGNER_PRIVATE_KEY: ${{ secrets.NEXT_PUBLIC_SWAP_CCTP_MAIN_SIGNER_PRIVATE_KEY }}
+          NEXT_PUBLIC_GAS_STATION_API_KEY: ${{ secrets.NEXT_PUBLIC_GAS_STATION_API_KEY }}
+      - name: Deploy example dapps on Publish to npm
+        if: steps.changesets.outputs.published == 'true' # Runs only if publishing happened
+        run: |
+          pnpm run deploy:example
+        env:
+          GITHUB_TOKEN: ${{ steps.authenticate.outputs.token }}
+          NEXT_PUBLIC_GAS_STATION_API_KEY: ${{ secrets.NEXT_PUBLIC_GAS_STATION_API_KEY }}
