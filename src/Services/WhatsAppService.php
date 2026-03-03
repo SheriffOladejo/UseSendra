@@ -55,6 +55,44 @@ class WhatsAppService {
     }
 
     /**
+     * Delete a WhatsApp message by WAMID (Cloud API)
+     */
+    public function deleteMessage($wamid)
+    {
+        if (!$wamid) {
+            error_log("deleteMessage called without wamid");
+            return false;
+        }
+
+        $url = "https://graph.facebook.com/v20.0/{$wamid}";
+
+        error_log("=== Deleting Message ===");
+        error_log("DELETE URL: $url");
+
+        $ch = curl_init($url);
+
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+            "Authorization: Bearer {$this->accessToken}"
+        ]);
+        curl_setopt($ch, CURLOPT_CUSTOMREQUEST, "DELETE");
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+
+        $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+
+        error_log("Delete HTTP Code: $httpCode");
+        error_log("Delete Response: $response");
+
+        if (curl_errno($ch)) {
+            error_log("cURL error (delete): " . curl_error($ch));
+        }
+
+        curl_close($ch);
+
+        return $httpCode >= 200 && $httpCode < 300;
+    }
+
+    /**
      * Send interactive button message
     */
     public function sendButtonMessage($to, $bodyText, $buttons) {
@@ -226,7 +264,7 @@ public function sendCTAUrlButton($to, $bodyText, $buttonText, $url) {
      * Send wallet connection URL
      */
     public function sendWalletConnectionURL($to, $phoneNumber, $username) {
-        $url = "https://usesendra.com/aptos-wallet-adapter/?phoneNumber=" . urlencode($phoneNumber) . "&username=" . urlencode($username);
+        $url = "https://usesendra.com/client/?phoneNumber=" . urlencode($phoneNumber) . "&username=" . urlencode($username);
         
         $message = "🔗 *Create your Account*\n\n" .
                 "Please click the link below to create an account:\n\n" .

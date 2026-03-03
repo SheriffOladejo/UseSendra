@@ -102,6 +102,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         sendJsonResponse($result, $result['success'] ? 200 : 400);
     }
 
+    // ── /voucher/claim ────────────────────────────────────────────────────────
+    // Called by the web app after recipient confirms their phone number
+    // No aptos_address needed — backend generates a fresh Sendra keypair
+    if (strpos($requestUri, '/voucher/claim') !== false || ($_GET['action'] ?? '') === 'voucherClaim') {
+        $data = json_decode($body, true);
+
+        if (!isset($data['token'], $data['phone_number'])) {
+            sendJsonResponse(['success' => false, 'message' => 'Missing token or phone_number'], 400);
+        }
+
+        $result = $messageController->executeVoucherClaim(
+            $data['token'],
+            $data['phone_number'],
+            $data['username'] ?? null   // ADD THIS
+        );
+
+        sendJsonResponse($result, $result['success'] ? 200 : 400);
+    }
+
     // ── /deposit ──────────────────────────────────────────────────────────────
     // Matches both /deposit path and ?action=deposit query string (used by nodit.php)
     $isDepositRequest = strpos($requestUri, '/deposit') !== false

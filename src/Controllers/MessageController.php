@@ -143,7 +143,7 @@ class MessageController
             return ['success' => false, 'reason' => 'already_exists'];
         }
 
-        $this->whatsappService->sendMessage($from, "⏳ Creating your account...");
+        $this->whatsappService->sendMessage($from, "⏳ Creating your wallet...");
 
         // ── Call Node.js aptos-service ────────────────────────────────────────
         $ch = curl_init('http://127.0.0.1:3001/accounts/create');
@@ -188,8 +188,7 @@ class MessageController
         // ── Show private key ONCE, save wamid, ask for confirmation ────────────
         $keyResult = $this->whatsappService->sendButtonMessage(
             $from,
-            "✅ *Your Sendra account is ready!*\n\n" .
-            "📍 *Id:*`{$from}`\n\n" .
+            "✅ *Your Sendra wallet is ready!*\n\n" .
             "📍 *Address:*\n`{$response['aptos_address']}`\n\n" .
             "🔐 *Backup Key — save this now, shown only once:*\n" .
             "`{$response['private_key_for_display']}`\n\n" .
@@ -243,7 +242,7 @@ class MessageController
      */
     private function handleKeyConfirmation($from, $message, $user)
     {
-        if ($message !== 'key_saved' && !in_array($message, ["yes", "saved", "done", "ok", "i've saved it"])) {
+        if ($message !== 'key_saved' && !in_array($message, ['yes', 'saved', 'done', 'ok', 'i have saved it'])) {
             // Re-prompt — don't let user proceed until they confirm
             $this->whatsappService->sendButtonMessage(
                 $from,
@@ -490,13 +489,7 @@ class MessageController
             $recipientUser = $this->userModel->findByPhone($lookupPhone);
 
             if (!$recipientUser || empty($recipientUser['aptos_address'])) {
-                $this->whatsappService->sendMessage($from,
-                    "⚠️ *{$recipient}* is not registered on Sendra.
-
-" .
-                    "Ask them to sign up first, or send to their wallet address directly."
-                );
-                return ['success' => false, 'reason' => 'recipient_not_found'];
+                return $this->handleVoucherCreation($from, $user, $lookupPhone, $amount, $currency);
             }
 
             $recipientName = $recipientUser['username'] ?? $lookupPhone;
@@ -513,14 +506,12 @@ class MessageController
             return ['success' => false, 'reason' => 'invalid_recipient'];
         }
 
-        // ── Route by account type ─────────────────────────────────────────────
-        $accountType = $user['account_type'] ?? 'sendra';
-
-        if ($accountType === 'sendra') {
+        // ── Route: has server-side key = full in-chat flow, no key = Petra redirect ──
+        if (!empty($user['encrypted_private_key'])) {
             return $this->queueTransactionAndAskForPin($from, $user, $amount, $currency, $recipient, $recipientName);
         }
 
-        // Petra user — redirect to website for wallet approval
+        // Petra / legacy wallet adapter user — redirect to website for approval
         $url = "https://usesendra.com/client?action=send"
             . "&amount="    . urlencode($amount)
             . "&currency="  . urlencode($currency)
@@ -799,7 +790,7 @@ class MessageController
             "💰 Check balance — type `/balance`\n" .
             "📤 Send USDT/USDC — type `send 50 USDT to 0x...`\n" .
             "📥 Receive funds — type `/receive`\n" .
-            "❓ Menu — type `/menu`"
+            "❓ Help — type `/help`"
         );
         return ['success' => true, 'action' => 'greeting'];
     }
@@ -907,4 +898,264 @@ class MessageController
         $this->whatsappService->sendMessage($from, rtrim($lines));
         return ['success' => true];
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // VOUCHERS
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Create a voucher when sender tries to pay a phone number not on Sendra.
+     * Stores the voucher in DB, sends the claim link back to sender.
+     */
+    private function handleVoucherCreation($from, $user, $recipientPhone, $amount, $currency)
+    {
+        // Only sendra users with a server-side key can create vouchers
+        if (empty($user['encrypted_private_key'])) {
+            $this->whatsappService->sendMessage($from,
+                "⚠️ *{$recipientPhone}* is not on Sendra yet.\n\n" .
+                "Your account uses an external wallet, so vouchers are not supported.\n" .
+                "Ask them to sign up and send directly."
+            );
+            return ['success' => false, 'reason' => 'petra_no_voucher'];
+        }
+
+        if (!$this->db) {
+            $this->whatsappService->sendMessage($from,
+                "❌ Could not create voucher. Please try again."
+            );
+            return ['success' => false];
+        }
+
+        // Generate secure unguessable token (256-bit)
+        $token     = bin2hex(random_bytes(32));
+        $voucherId = bin2hex(random_bytes(16));
+        $expiresAt = date('Y-m-d H:i:s', time() + (48 * 3600)); // 48hr TTL
+
+        try {
+            $stmt = $this->db->prepare("
+                INSERT INTO vouchers
+                    (id, token, created_by, amount, currency, recipient_phone, expires_at, created_at)
+                VALUES
+                    (:id, :token, :created_by, :amount, :currency, :recipient_phone, :expires_at, NOW())
+            ");
+            $stmt->execute([
+                'id'             => $voucherId,
+                'token'          => $token,
+                'created_by'     => $from,
+                'amount'         => $amount,
+                'currency'       => $currency,
+                'recipient_phone'=> $recipientPhone,
+                'expires_at'     => $expiresAt,
+            ]);
+        } catch (\PDOException $e) {
+            error_log("Voucher creation failed: " . $e->getMessage());
+            $this->whatsappService->sendMessage($from,
+                "❌ Could not create voucher. Please try again."
+            );
+            return ['success' => false];
+        }
+
+        $voucherUrl  = "https://usesendra.com/client?voucher={$token}&phoneNumber={$recipientPhone}";
+        $displayPhone = $recipientPhone;
+
+        $this->whatsappService->sendMessage($from,
+            "📱 *{$displayPhone}* is not on Sendra yet.\n\n" .
+            "✅ A voucher for *{$amount} {$currency}* has been created.\n\n" .
+            "👇 *Forward this link to them:*\n" .
+            "{$voucherUrl}\n\n" .
+            "When they sign up on Sendra, the *{$amount} {$currency}* will be " .
+            "automatically sent to their wallet.\n\n" .
+            "⏳ _Expires in 48 hours._"
+        );
+
+        error_log("Voucher created: id=$voucherId phone=$recipientPhone amount=$amount $currency by=$from");
+        return ['success' => true, 'voucher_id' => $voucherId];
+    }
+
+    /**
+     * Execute a voucher claim — called from webhook.php after recipient signs up.
+     * Transfers funds from voucher creator to the new user.
+     */
+    public function executeVoucherClaim($token, $recipientPhone, $username = null)
+    {
+        if (!$this->db) return ['success' => false, 'message' => 'DB unavailable'];
+
+        // Fetch and validate voucher
+        $stmt = $this->db->prepare("
+            SELECT * FROM vouchers
+            WHERE token = ? AND status = 'pending' AND expires_at > NOW()
+            LIMIT 1
+        ");
+        $stmt->execute([$token]);
+        $voucher = $stmt->fetch(\PDO::FETCH_ASSOC);
+
+        if (!$voucher) {
+            return ['success' => false, 'message' => 'Voucher not found or expired'];
+        }
+
+        if ($voucher['recipient_phone'] !== $recipientPhone) {
+            return ['success' => false, 'message' => 'Phone number does not match voucher'];
+        }
+
+        // Get sender's account
+        $stmt = $this->db->prepare("SELECT * FROM users WHERE phone_number = ? LIMIT 1");
+        $stmt->execute([$voucher['created_by']]);
+        $sender = $stmt->fetch(\PDO::FETCH_ASSOC);
+
+        if (!$sender || empty($sender['encrypted_private_key'])) {
+            return ['success' => false, 'message' => 'Sender account error'];
+        }
+
+        // Lock voucher immediately to prevent double-claim
+        $this->db->prepare("
+            UPDATE vouchers SET status = 'claimed', claimed_by = ?, claimed_at = NOW() WHERE id = ?
+        ")->execute([$recipientPhone, $voucher['id']]);
+
+        // ── Generate a new Sendra wallet for the recipient via aptos-service ──
+        $existingUser = $this->userModel->findByPhone($recipientPhone);
+        if ($existingUser) {
+            // Already has an account — use their existing address
+            $recipientAddress = $existingUser['aptos_address'];
+            error_log("Voucher claim: $recipientPhone already registered, using existing address");
+        } else {
+            // Create a fresh Sendra keypair
+            $ch = curl_init('http://127.0.0.1:3001/accounts/create');
+            curl_setopt_array($ch, [
+                CURLOPT_POST           => true,
+                CURLOPT_POSTFIELDS     => json_encode(['phone_number' => $recipientPhone]),
+                CURLOPT_HTTPHEADER     => [
+                    'Content-Type: application/json',
+                    'X-Internal-Secret: ' . $_ENV['INTERNAL_API_SECRET'],
+                ],
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_TIMEOUT        => 15,
+            ]);
+            $aptosResponse = json_decode(curl_exec($ch), true);
+            curl_close($ch);
+
+            if (!$aptosResponse || empty($aptosResponse['success'])) {
+                // Revert voucher lock so they can retry
+                $this->db->prepare("UPDATE vouchers SET status = 'pending', claimed_by = NULL, claimed_at = NULL WHERE id = ?")
+                         ->execute([$voucher['id']]);
+                error_log("Voucher claim: aptos-service failed for $recipientPhone: " . json_encode($aptosResponse));
+                return ['success' => false, 'message' => 'Could not create wallet. Please try again.'];
+            }
+
+            $recipientAddress    = $aptosResponse['aptos_address'];
+            $defaultUsername = $username ?? ('user_' . substr($recipientPhone, -4));
+
+            $this->authController->signup(
+                $recipientPhone,
+                $defaultUsername,
+                $recipientAddress,
+                $aptosResponse['encrypted_private_key'],
+                'sendra'
+            );
+
+            // Send private key to recipient via WhatsApp — they must save it
+            $this->whatsappService->sendButtonMessage(
+                $recipientPhone,
+                "🔐 *Your Sendra wallet has been created!*\n\n" .
+                "📍 *Address:*\n`{$recipientAddress}`\n\n" .
+                "🔑 *Backup Key — save this now, shown only once:*\n" .
+                "`{$aptosResponse['private_key_for_display']}`\n\n" .
+                "⚠️ Store this somewhere safe. Tap below once saved.",
+                ['key_saved' => "✅ I've saved it"]
+            );
+
+            // Put user in key confirmation state
+            $this->userModel->update($recipientPhone, ['awaiting_key_confirm' => 1]);
+
+            error_log("Voucher claim: created new Sendra account for $recipientPhone at $recipientAddress");
+        }
+
+        // Execute transfer via aptos-service
+        $ch = curl_init('http://127.0.0.1:3001/transactions/execute');
+        curl_setopt_array($ch, [
+            CURLOPT_POST           => true,
+            CURLOPT_POSTFIELDS     => json_encode([
+                'sender_address'        => $sender['aptos_address'],
+                'encrypted_private_key' => $sender['encrypted_private_key'],
+                'recipient'             => $recipientAddress,
+                'amount'               => $voucher['amount'],
+                'currency'             => $voucher['currency'],
+            ]),
+            CURLOPT_HTTPHEADER     => [
+                'Content-Type: application/json',
+                'X-Internal-Secret: ' . $_ENV['INTERNAL_API_SECRET'],
+            ],
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT        => 30,
+        ]);
+        $result = json_decode(curl_exec($ch), true);
+        curl_close($ch);
+
+        if (!empty($result['success'])) {
+            $hash = $result['tx_hash'];
+
+            // Save tx_hash on voucher
+            $this->db->prepare("UPDATE vouchers SET tx_hash = ? WHERE id = ?")
+                     ->execute([$hash, $voucher['id']]);
+
+            // Record in transaction history for both sides
+            $this->recordTransaction([
+                'user_phone'    => $voucher['created_by'],
+                'direction'     => 'out',
+                'amount'        => $voucher['amount'],
+                'currency'      => $voucher['currency'],
+                'status'        => 'confirmed',
+                'aptos_address' => $sender['aptos_address'],
+                'counterparty'  => $recipientAddress,
+                'tx_hash'       => $hash,
+                'explorer_url'  => "https://explorer.aptoslabs.com/txn/{$hash}?network=testnet",
+            ]);
+            $this->recordTransaction([
+                'user_phone'    => $recipientPhone,
+                'direction'     => 'in',
+                'amount'        => $voucher['amount'],
+                'currency'      => $voucher['currency'],
+                'status'        => 'confirmed',
+                'aptos_address' => $recipientAddress,
+                'counterparty'  => $sender['aptos_address'],
+                'tx_hash'       => $hash,
+                'explorer_url'  => "https://explorer.aptoslabs.com/txn/{$hash}?network=testnet",
+            ]);
+
+            // Get names for personalised messages
+            $senderName    = $sender['username'] ?? $voucher['created_by'];
+            $recipientUser = $this->userModel->findByPhone($recipientPhone);
+            $recipientName = $recipientUser['username'] ?? $recipientPhone;
+
+            // Notify sender
+            $this->whatsappService->sendMessage($voucher['created_by'],
+                "✅ *Voucher Claimed!*\n\n" .
+                "*{$recipientName}* signed up and received your " .
+                "*{$voucher['amount']} {$voucher['currency']}*.\n\n" .
+                "🔗 https://explorer.aptoslabs.com/txn/{$hash}?network=testnet"
+            );
+
+            // Notify recipient — mention sender by name
+            $this->whatsappService->sendMessage($recipientPhone,
+                "🎉 *You received a voucher!*\n\n" .
+                "*{$senderName}* sent you *{$voucher['amount']} {$voucher['currency']}* " .
+                "and it has been credited to your wallet.\n\n" .
+                "💰 Type *balance* to check your wallet.\n" .
+                "📋 Type *history* to see your transactions."
+            );
+
+            error_log("Voucher claimed: {$voucher['id']} by $recipientPhone tx=$hash");
+            return ['success' => true, 'tx_hash' => $hash];
+
+        } else {
+            // Revert voucher so they can try again
+            $this->db->prepare("
+                UPDATE vouchers SET status = 'pending', claimed_by = NULL, claimed_at = NULL WHERE id = ?
+            ")->execute([$voucher['id']]);
+
+            $error = $result['error'] ?? 'Transfer failed';
+            error_log("Voucher transfer failed: {$voucher['id']} error=$error");
+            return ['success' => false, 'message' => $error];
+        }
+    }
+
 }
