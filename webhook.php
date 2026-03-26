@@ -65,7 +65,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     error_log("=== WEBHOOK HIT: $requestUri ===");
 
     // ── /signup ───────────────────────────────────────────────────────────────
-    if (strpos($requestUri, '/signup') !== false) {
+    if (strpos($requestUri, '/signup') !== false || ($_GET['action'] ?? '') === 'signup') {
         $data = json_decode($body, true);
 
         if (!isset($data['phoneNumber'], $data['username'], $data['aptos_address'])) {
@@ -86,7 +86,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     // ── /sendSuccess ──────────────────────────────────────────────────────────
-    if (strpos($requestUri, '/sendSuccess') !== false) {
+    if (strpos($requestUri, '/sendSuccess') !== false || ($_GET['action'] ?? '') === 'sendSuccess') {
         $data = json_decode($body, true);
 
         if (!isset($data['amount'], $data['currency'], $data['recipient'], $data['sender'], $data['senderPhoneNumber'])) {

@@ -49,7 +49,7 @@ class WhatsAppService {
                    "💰 Buy and sell USDT/USDC\n" .
                    "📤 Send and receive crypto\n" .
                    "💬 Manage everything right here on WhatsApp\n\n" .
-                   "Type *menu* to see what you can do or *help* if you need assistance.";
+                   "Type *menu* to see what you can do";
         
         return $this->sendMessage($phoneNumber, $message);
     }

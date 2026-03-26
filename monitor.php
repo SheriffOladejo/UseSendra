@@ -32,8 +32,8 @@ function alert($whatsappService, $adminPhone, $subject, $body) {
     error_log("MONITOR ALERT [$subject]: $body");
 
     // WhatsApp alert
-    //$whatsappService->sendMessage($adminPhone,
-    //    "🚨 *Sendra Alert*\n*{$subject}*\n\n{$body}"
+    $whatsappService->sendMessage($adminPhone,
+        "🚨 *Sendra Alert*\n*{$subject}*\n\n{$body}"
     );
 
     // Email alert

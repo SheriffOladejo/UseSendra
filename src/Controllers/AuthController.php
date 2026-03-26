@@ -50,6 +50,7 @@ class AuthController
 
         if ($userId) {
             error_log("New {$accountType} user registered: {$username} ({$phoneNumber})");
+            $this->whatsappService->sendSignupSuccessMessage($phoneNumber, $username);
             return [
                 'success'  => true,
                 'message'  => 'User registered successfully',

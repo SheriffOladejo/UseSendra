@@ -40,7 +40,7 @@ class MessageController
             }
             // They might be sending a button reply before any greeting
             if ($messageLower === 'create_account') return $this->handleCreateAccount($from, $displayName);
-            if ($messageLower === 'import_account')  return $this->handleImportAccount($from);
+            if ($messageLower === 'import_account')  return $this->handleImportAccount($from, $displayName);
 
             return $this->whatsappService->sendMessage($from,
                 "👋 Hi! I'm Sendra. Type *hi* to get started."
@@ -88,7 +88,7 @@ class MessageController
                 return $this->handleCreateAccount($from, $user['username'] ?? 'there');
 
             case $messageLower === 'import_account':
-                return $this->handleImportAccount($from);
+                return $this->handleImportAccount($from, $displayName);
 
             // Cancel a pending transaction
             case str_starts_with($messageLower, 'cancel_'):
@@ -218,10 +218,11 @@ class MessageController
     /**
      * Petra flow: redirect user to wallet adapter website.
      */
-    private function handleImportAccount($from)
+    private function handleImportAccount($from, $username)
     {
-        $url = "https://usesendra.com/aptos-wallet-adapter/?"
-            . "phoneNumber=" . urlencode($from)
+        $url = "https://usesendra.com/client/?"
+            . "sender=" . urlencode($from)
+            . "&username="    . urlencode($username)
             . "&mode=import";
 
         $this->whatsappService->sendCTAUrlButton(
