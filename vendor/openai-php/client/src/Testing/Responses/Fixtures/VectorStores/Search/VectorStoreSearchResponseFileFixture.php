@@ -9,7 +9,7 @@ final class VectorStoreSearchResponseFileFixture
         'filename' => 'document.pdf',
         'score' => 0.95,
         'attributes' => [
-            'author' => 'John Doe',
+            'author' => 'Chinedu Sani Adeyemi',
             'date' => '2023-01-01',
         ],
         'content' => [

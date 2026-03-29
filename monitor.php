@@ -10,14 +10,22 @@ use App\Services\WhatsAppService;
 // ── Config ────────────────────────────────────────────────────────────────────
 $_ENV['INTERNAL_API_SECRET'] = 'string';
 $ACCESS_TOKEN    = "EAAnBMaDNtoUBQeFAjBMFryee3LifVRqjB4NkecAPZAnXKRKcUZA2u9JcilTaICwqa7qJJWNuQctZCH020Ir1SVzO33UcCkuP8s5H45BpyIrZAQDKnJVDS33qZAt0IlOptKZB7aO5ZBytSzYgTTMLFI0e4yrtpp0MyGqkMKbSw4bvMPUA5l91ZCUEZBb4saoChLQZDZD";
-$PHONE_NUMBER_ID = "851265871413834";
+
+$SENDRA_APTOS_PHONE_ID = "851265871413834";
+$SENDRA_LOGISTICS_PHONE_ID = "1097784993409171";
+
+$input = json_decode(file_get_contents('php://input'), true);
+$incomingPhoneNumberId = $input['entry'][0]['changes'][0]['value']['metadata']['phone_number_id'] ?? $SENDRA_APTOS_PHONE_ID;
+
+$db = Database::getInstance()->getConnection();
+$whatsappService = new WhatsAppService($ACCESS_TOKEN, $incomingPhoneNumberId);
+
+//$PHONE_NUMBER_ID2 = "942651465596731";
 $ADMIN_PHONE     = "2348164727987";   // your WhatsApp number
 $ADMIN_EMAIL     = "sherifffoladejo@gmail.com";
 $FROM_EMAIL      = "hello@usesendra.com";
 $FROM_NAME       = "Sendra Monitor";
 
-$db              = Database::getInstance()->getConnection();
-$whatsappService = new WhatsAppService($ACCESS_TOKEN, $PHONE_NUMBER_ID);
 
 $alertCount = 0;
 $allAlerts  = [];

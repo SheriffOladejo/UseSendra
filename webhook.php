@@ -17,22 +17,50 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 
 require __DIR__ . '/vendor/autoload.php';
 require __DIR__ . '/config/Database.php';
+$botConfigs = require __DIR__ . '/config/Bots.php';
 
 use App\Controllers\AuthController;
+use App\Controllers\LogisticsAuthController;
 use App\Controllers\MessageController;
 use App\Services\WhatsAppService;
 
 $VERIFY_TOKEN    = "214047d9376eba3bc1efc4ff0dc8ffc75c11e88768c999dc9d11e53bc3df5052";
 $ACCESS_TOKEN    = "EAAnBMaDNtoUBQeFAjBMFryee3LifVRqjB4NkecAPZAnXKRKcUZA2u9JcilTaICwqa7qJJWNuQctZCH020Ir1SVzO33UcCkuP8s5H45BpyIrZAQDKnJVDS33qZAt0IlOptKZB7aO5ZBytSzYgTTMLFI0e4yrtpp0MyGqkMKbSw4bvMPUA5l91ZCUEZBb4saoChLQZDZD";
-$PHONE_NUMBER_ID = "851265871413834";
 
-$db              = Database::getInstance()->getConnection();
-$whatsappService = new WhatsAppService($ACCESS_TOKEN, $PHONE_NUMBER_ID);
+$SENDRA_APTOS_PHONE_ID = "851265871413834";
+$SENDRA_LOGISTICS_PHONE_ID = "1097784993409171";
+
+$input = json_decode(file_get_contents('php://input'), true);
+$incomingPhoneNumberId = $input['entry'][0]['changes'][0]['value']['metadata']['phone_number_id'] ?? $SENDRA_APTOS_PHONE_ID;
+
+$bot = $botConfigs[$incomingPhoneNumberId] ?? null;
+
+if (!$bot) {
+    exit("Unknown bot");
+}
+
+$botConfig = $botConfigs[$incomingPhoneNumberId] ?? $botConfigs[$SENDRA_APTOS_PHONE_ID];
+
+$db = Database::getInstance($bot['db_config'])->getConnection();
+$whatsappService = new WhatsAppService($ACCESS_TOKEN, $incomingPhoneNumberId);
+
 $authController  = new AuthController($db, $whatsappService);
+$controllerClass = "App\\Controllers\\{$botConfig['controller']}";
+
+// Separate auth + message controllers
+if ($incomingPhoneNumberId === $SENDRA_LOGISTICS_PHONE_ID) {
+    // Logistics bot
+    $authController = new LogisticsAuthController($db, $whatsappService);
+    $messageControllerClass = "App\\Controllers\\LogisticsMessageController";
+} else {
+    // Default Aptos bot
+    $authController = new AuthController($db, $whatsappService);
+    $messageControllerClass = "App\\Controllers\\{$botConfig['controller']}";
+}
 
 // FIXED: Old code: new MessageController($whatsappService, $db)
 //        New MessageController constructor requires AuthController as second param, not $db
-$messageController = new MessageController($whatsappService, $authController, $db);
+$messageController = new $controllerClass($whatsappService, $authController, $db);
 
 function sendJsonResponse($data, $statusCode = 200) {
     http_response_code($statusCode);
@@ -62,7 +90,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $body       = file_get_contents("php://input");
     $requestUri = $_SERVER['REQUEST_URI'];
 
-    error_log("=== WEBHOOK HIT: $requestUri ===");
+    error_log("=== WEBHOOK HIT: $requestUri === $body");
 
     // ── /signup ───────────────────────────────────────────────────────────────
     if (strpos($requestUri, '/signup') !== false || ($_GET['action'] ?? '') === 'signup') {
@@ -199,21 +227,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $from = $msg['from'] ?? null;
                 if (!$from) continue;
 
-                $messageBody = $msg['text']['body']
-                    ?? $msg['interactive']['button_reply']['id']
-                    ?? $msg['interactive']['list_reply']['id']
-                    ?? '';
-
-                error_log("Message from $from: " . ($messageBody ?: '[type: ' . ($msg['type'] ?? 'unknown') . ']'));
+                // Determine message payload
+                if (isset($msg['text']['body'])) {
+                    $messagePayload = trim(strtolower($msg['text']['body']));
+                } elseif (isset($msg['interactive']['button_reply']['id'])) {
+                    $messagePayload = trim(strtolower($msg['interactive']['button_reply']['id']));
+                } elseif (isset($msg['interactive']['list_reply']['id'])) {
+                    $messagePayload = trim(strtolower($msg['interactive']['list_reply']['id']));
+                } elseif ($msg['type'] === 'location') {
+                    $lat = $msg['location']['latitude'] ?? null;
+                    $lng = $msg['location']['longitude'] ?? null;
+                    $messagePayload = "$lat,$lng";
+                    error_log("Received location message: $messagePayload");
+                } elseif ($msg['type'] === 'image') {
+                    // FIXED: Extract image data from the current $msg, not hardcoded array indices
+                    $messagePayload = json_encode(['image' => $msg['image']]);
+                    error_log("Received image message: " . json_encode($msg['image']));
+                } else {
+                    $messagePayload = '';
+                }
 
                 $userInfo   = $whatsappService->extractUserInfo($data);
                 $userResult = $authController->getUser($from);
                 $user       = $userResult['user'] ?? null;
 
-                // Use real WhatsApp display name if available, fall back to 'there'
                 $displayName = $userInfo['username'] ?? 'there';
 
-                $messageController->handleIncomingMessage($from, $messageBody, $user, $displayName);
+                $messageController->handleIncomingMessage($from, $messagePayload, $user, $displayName);
             }
         }
     }

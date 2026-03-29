@@ -1,36 +1,40 @@
 <?php
 
+$bots = require __DIR__ . '/Bots.php';
+
 class Database {
-    private static $instance = null;
+
+    private static $instances = [];
     private $connection;
-    
-    private $host = 'localhost';
-    private $dbname = 'sendra_db';
-    private $username = 'developer';
-    private $password = 'Stipendly@2026';
-    
-    private function __construct() {
+
+    private function __construct($config) {
         try {
             $this->connection = new PDO(
-                "mysql:host={$this->host};dbname={$this->dbname};charset=utf8mb4",
-                $this->username,
-                $this->password
+                "mysql:host={$config['host']};dbname={$config['name']};charset=utf8mb4",
+                $config['user'],
+                $config['pass']
             );
+
             $this->connection->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
             $this->connection->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+
         } catch (PDOException $e) {
             error_log("Database connection failed: " . $e->getMessage());
             throw $e;
         }
     }
-    
-    public static function getInstance() {
-        if (self::$instance === null) {
-            self::$instance = new self();
+
+    public static function getInstance($config) {
+
+        $key = $config['name']; // unique DB key
+
+        if (!isset(self::$instances[$key])) {
+            self::$instances[$key] = new self($config);
         }
-        return self::$instance;
+
+        return self::$instances[$key];
     }
-    
+
     public function getConnection() {
         return $this->connection;
     }

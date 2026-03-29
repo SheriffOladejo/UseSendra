@@ -39,10 +39,12 @@ class MessageController
                 return $this->whatsappService->sendWelcomeMessage($from, $displayName);
             }
             // They might be sending a button reply before any greeting
+            if ($messageLower === 'create_logistics_account') return $this->handleCreateLogisticsAccount($from, $displayName);
             if ($messageLower === 'create_account') return $this->handleCreateAccount($from, $displayName);
             if ($messageLower === 'import_account')  return $this->handleImportAccount($from, $displayName);
 
-            return $this->whatsappService->sendMessage($from,
+            return $this->whatsappService->sendMessage(
+                $from,
                 "👋 Hi! I'm Sendra. Type *hi* to get started."
             );
         }
@@ -58,9 +60,10 @@ class MessageController
                 return $this->handlePinSetup($from, $message);
             }
             // In PIN setup state but typed something else — re-prompt
-            $this->whatsappService->sendMessage($from,
+            $this->whatsappService->sendMessage(
+                $from,
                 "\u{1F510} Please reply with your *6-digit PIN* to secure your account.\n\n" .
-                "Just type 6 numbers, e.g: 123456"
+                    "Just type 6 numbers, e.g: 123456"
             );
             return ['success' => false, 'reason' => 'awaiting_pin'];
         }
@@ -74,9 +77,10 @@ class MessageController
                 return $this->handleCancelTransaction($from, $user['pending_tx_id']);
             }
             // Has pending tx but typed something else — re-prompt
-            $this->whatsappService->sendMessage($from,
+            $this->whatsappService->sendMessage(
+                $from,
                 "\u23F3 You have a pending transaction.\n\n" .
-                "Enter your *6-digit PIN* to confirm, or type *cancel* to abort."
+                    "Enter your *6-digit PIN* to confirm, or type *cancel* to abort."
             );
             return ['success' => false, 'reason' => 'awaiting_pin_confirmation'];
         }
@@ -90,18 +94,18 @@ class MessageController
             case $messageLower === 'import_account':
                 return $this->handleImportAccount($from, $displayName);
 
-            // Cancel a pending transaction
+                // Cancel a pending transaction
             case str_starts_with($messageLower, 'cancel_'):
                 return $this->handleCancelTransaction($from, substr($message, 7));
 
-            // Send commands
+                // Send commands
             case str_starts_with($messageLower, '/send'):
                 return $this->handleSendCommand($from);
 
             case str_starts_with($messageLower, 'send '):
                 return $this->handleSendInitiation($from, $messageLower, $user);
 
-            // Other commands
+                // Other commands
             case $messageLower === '/balance':
             case $messageLower === 'balance':
                 return $this->handleBalanceCommand($from, $user);
@@ -127,23 +131,47 @@ class MessageController
     }
 
     // ─────────────────────────────────────────────────────────────────────────
+    // LOGISTICS ACCOUNT CREATION & IMPORT
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private function handleCreateLogisticsAccount($from, $username)
+    {
+        // For simplicity, logistics accounts are just regular accounts with a flag
+        $result = $this->handleCreateAccount($from, $username, true);
+        if ($result['success']) {
+            $this->userModel->update($from, ['is_logistics' => 1]);
+            $this->whatsappService->sendMessage(
+                $from,
+                "🚚 Your logistics account has been created!\n\n" .
+                    "You can now get delivery orders through our platform."
+            );
+        }
+        return $result;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
     // ACCOUNT CREATION & IMPORT
     // ─────────────────────────────────────────────────────────────────────────
 
     /**
      * Sendra-native flow: generate keypair on server, store encrypted key.
      */
-    private function handleCreateAccount($from, $username)
+    private function handleCreateAccount($from, $username, $isLogistics = false)
     {
         // Don't create a second account if already registered
         if ($this->userModel->exists($from)) {
-            $this->whatsappService->sendMessage($from,
+            $this->whatsappService->sendMessage(
+                $from,
                 "✅ You already have a Sendra account!\nType *menu* to see what you can do."
             );
             return ['success' => false, 'reason' => 'already_exists'];
         }
 
-        $this->whatsappService->sendMessage($from, "⏳ Creating your wallet...");
+        if ($isLogistics) {
+            $this->whatsappService->sendMessage($from, "⏳ Setting up your logistics account...");
+        } else {
+            $this->whatsappService->sendMessage($from, "⏳ Setting up your Sendra account...");
+        }
 
         // ── Call Node.js aptos-service ────────────────────────────────────────
         $ch = curl_init('http://127.0.0.1:3001/accounts/create');
@@ -162,8 +190,9 @@ class MessageController
 
         if (!$response || empty($response['success'])) {
             error_log("aptos-service account creation failed for $from: " . json_encode($response));
-            $this->whatsappService->sendMessage($from,
-                "❌ Something went wrong creating your wallet. Please try again."
+            $this->whatsappService->sendMessage(
+                $from,
+                "❌ Something went wrong creating your account. Please try again."
             );
             return ['success' => false];
         }
@@ -174,42 +203,46 @@ class MessageController
             $username,
             $response['aptos_address'],
             $response['encrypted_private_key'],
-            'sendra'
+            'sendra',
+            $isLogistics
         );
 
         if (!$result['success']) {
             error_log("DB signup failed for $from: " . $result['message']);
-            $this->whatsappService->sendMessage($from,
+            $this->whatsappService->sendMessage(
+                $from,
                 "❌ Could not save your account. Please try again."
             );
             return ['success' => false];
         }
 
-        // ── Show private key ONCE, save wamid, ask for confirmation ────────────
-        $keyResult = $this->whatsappService->sendButtonMessage(
-            $from,
-            "✅ *Your Sendra wallet is ready!*\n\n" .
-            "📍 *Address:*\n`{$response['aptos_address']}`\n\n" .
-            "🔐 *Backup Key — save this now, shown only once:*\n" .
-            "`{$response['private_key_for_display']}`\n\n" .
-            "⚠️ Store this somewhere safe. It lets you access your funds independently of Sendra.\n\n" .
-            "━━━━━━━━━━━━━━━━━━━━\n" .
-            "Tap *I've saved it* once you've stored the key safely. " .
-            "The message will then be deleted for your security.",
-            ['key_saved' => "✅ I've saved it"]
-        );
+        if (!$isLogistics) {
+            // ── Show private key ONCE, save wamid, ask for confirmation ────────────
+            $keyResult = $this->whatsappService->sendButtonMessage(
+                $from,
+                "✅ *Your Sendra wallet is ready!*\n\n" .
+                    "📍 *Address:*\n`{$response['aptos_address']}`\n\n" .
+                    "🔐 *Backup Key — save this now, shown only once:*\n" .
+                    "`{$response['private_key_for_display']}`\n\n" .
+                    "⚠️ Store this somewhere safe. It lets you access your funds independently of Sendra.\n\n" .
+                    "━━━━━━━━━━━━━━━━━━━━\n" .
+                    "Tap *I've saved it* once you've stored the key safely. " .
+                    "The message will then be deleted for your security.",
+                ['key_saved' => "✅ I've saved it"]
+            );
 
-        // Save the wamid so we can delete the key message after confirmation
-        $wamid = $keyResult['response']['messages'][0]['id'] ?? null;
-        if ($wamid) {
-            $this->userModel->update($from, [
-                'key_message_wamid'   => $wamid,
-                'awaiting_key_confirm' => 1,
-            ]);
-        } else {
-            // Couldn't get wamid — still proceed but won't be able to delete
-            error_log("Could not capture wamid for key message — $from");
-            $this->userModel->update($from, ['awaiting_pin_setup' => 1]);
+            // Save the wamid so we can delete the key message after confirmation
+            $wamid = $keyResult['response']['messages'][0]['id'] ?? null;
+            if ($wamid) {
+                $this->userModel->update($from, [
+                    'key_message_wamid'   => $wamid,
+                    'awaiting_key_confirm' => 1,
+                ]);
+            } else {
+                // Couldn't get wamid — still proceed but won't be able to delete
+                error_log("Could not capture wamid for key message — $from");
+                $this->userModel->update($from, ['awaiting_pin_setup' => 1]);
+            }
         }
 
         return ['success' => true, 'account_type' => 'sendra'];
@@ -228,8 +261,8 @@ class MessageController
         $this->whatsappService->sendCTAUrlButton(
             $from,
             "🔗 *Import your existing wallet*\n\n" .
-            "Connect your Petra wallet to link it with your Sendra account.\n\n" .
-            "After connecting, you'll approve transactions through Petra on our website.",
+                "Connect your Petra wallet to link it with your Sendra account.\n\n" .
+                "After connecting, you'll approve transactions through Petra on our website.",
             "Connect Petra Wallet",
             $url
         );
@@ -248,7 +281,7 @@ class MessageController
             $this->whatsappService->sendButtonMessage(
                 $from,
                 "⚠️ Please confirm you've saved your backup key before continuing.\n\n" .
-                "Once you confirm, the key message will be deleted for your security.",
+                    "Once you confirm, the key message will be deleted for your security.",
                 ['key_saved' => "✅ I've saved it"]
             );
             return ['success' => false, 'reason' => 'awaiting_key_confirm'];
@@ -268,10 +301,11 @@ class MessageController
             'awaiting_pin_setup'   => 1,
         ]);
 
-        $this->whatsappService->sendMessage($from,
+        $this->whatsappService->sendMessage(
+            $from,
             "✅ *Key confirmed and message deleted.*\n\n" .
-            "🔐 Now set a *6-digit PIN* to confirm transactions.\n" .
-            "Type your PIN now:"
+                "🔐 Now set a *6-digit PIN* to confirm transactions.\n" .
+                "Type your PIN now:"
         );
 
         return ['success' => true];
@@ -287,7 +321,8 @@ class MessageController
     private function handlePinSetup($from, $pin)
     {
         if (!preg_match('/^\d{6}$/', $pin)) {
-            $this->whatsappService->sendMessage($from,
+            $this->whatsappService->sendMessage(
+                $from,
                 "⚠️ PIN must be exactly 6 digits. Please try again:"
             );
             return ['success' => false];
@@ -295,10 +330,11 @@ class MessageController
 
         $this->userModel->setPin($from, $pin);
 
-        $this->whatsappService->sendMessage($from,
+        $this->whatsappService->sendMessage(
+            $from,
             "✅ *PIN set successfully!*\n\n" .
-            "You'll use this PIN to confirm all transactions.\n\n" .
-            "Type *menu* to see what you can do."
+                "You'll use this PIN to confirm all transactions.\n\n" .
+                "Type *menu* to see what you can do."
         );
 
         return ['success' => true];
@@ -315,7 +351,8 @@ class MessageController
         $pinValid = $this->userModel->verifyPin($from, $pin);
         error_log("PIN_CONFIRM: pin_valid=" . ($pinValid ? 'YES' : 'NO'));
         if (!$pinValid) {
-            $this->whatsappService->sendMessage($from,
+            $this->whatsappService->sendMessage(
+                $from,
                 "❌ Wrong PIN. Please try again, or type *cancel* to abort."
             );
             return ['success' => false];
@@ -325,7 +362,8 @@ class MessageController
         $pending = $this->getPendingTransaction($user['pending_tx_id']);
 
         if (!$pending) {
-            $this->whatsappService->sendMessage($from,
+            $this->whatsappService->sendMessage(
+                $from,
                 "⚠️ No pending transaction found. Please start again."
             );
             $this->userModel->clearPendingTransaction($from);
@@ -333,7 +371,8 @@ class MessageController
         }
 
         if (strtotime($pending['expires_at']) < time()) {
-            $this->whatsappService->sendMessage($from,
+            $this->whatsappService->sendMessage(
+                $from,
                 "⏰ Transaction expired (5 min limit). Please start again."
             );
             $this->userModel->clearPendingTransaction($from);
@@ -345,18 +384,20 @@ class MessageController
             $this->userModel->clearPendingTransaction($from);
             $accountType = $user['account_type'] ?? 'unknown';
             if ($accountType === 'petra') {
-                $this->whatsappService->sendMessage($from,
+                $this->whatsappService->sendMessage(
+                    $from,
                     "⚠️ Your account uses Petra wallet.
 
 " .
-                    "To send funds, use the send command and approve through your Petra wallet on our website."
+                        "To send funds, use the send command and approve through your Petra wallet on our website."
                 );
             } else {
-                $this->whatsappService->sendMessage($from,
+                $this->whatsappService->sendMessage(
+                    $from,
                     "⚠️ Your account was created before the current wallet system.
 
 " .
-                    "Please type *hi* and create a new Sendra account to enable in-chat transactions."
+                        "Please type *hi* and create a new Sendra account to enable in-chat transactions."
                 );
             }
             return ['success' => false, 'reason' => 'no_private_key'];
@@ -407,17 +448,19 @@ class MessageController
                 'tx_hash'       => $hash,
                 'explorer_url'  => "https://explorer.aptoslabs.com/txn/{$hash}?network=testnet",
             ]);
-            $this->whatsappService->sendMessage($from,
+            $this->whatsappService->sendMessage(
+                $from,
                 "✅ *Transaction Confirmed!*\n\n" .
-                "Sent: *{$pending['amount']} {$pending['currency']}*\n" .
-                "To: `{$pending['recipient_address']}`\n\n" .
-                "🔗 https://explorer.aptoslabs.com/txn/{$hash}?network=testnet"
+                    "Sent: *{$pending['amount']} {$pending['currency']}*\n" .
+                    "To: `{$pending['recipient_address']}`\n\n" .
+                    "🔗 https://explorer.aptoslabs.com/txn/{$hash}?network=testnet"
             );
         } else {
             $this->updatePendingTransactionStatus($pending['id'], 'failed');
             $errorMsg = $result['error'] ?? ($curlError ? "Service unreachable" : "Unknown error");
             error_log("Transaction failed for $from: $errorMsg | raw: $rawResponse");
-            $this->whatsappService->sendMessage($from,
+            $this->whatsappService->sendMessage(
+                $from,
                 "❌ Transaction failed: {$errorMsg}\n\nPlease try again or contact support."
             );
         }
@@ -435,12 +478,12 @@ class MessageController
     private function handleSendCommand($from)
     {
         $reply = "Please provide the full details to send:\n\n" .
-                 "Format: *send [amount] [currency] to [recipient]*\n\n" .
-                 "Examples:\n" .
-                 "`send 50 USDT to 2348012345678`\n" .
-                 "`send 10 USDC to 0x1234...`\n\n" .
-                 "Recipient can be a *phone number* or *Aptos address*.\n" .
-                 "Supported currencies: *USDT*, *USDC*";
+            "Format: *send [amount] [currency] to [recipient]*\n\n" .
+            "Examples:\n" .
+            "`send 50 USDT to 2348012345678`\n" .
+            "`send 10 USDC to 0x1234...`\n\n" .
+            "Recipient can be a *phone number* or *Aptos address*.\n" .
+            "Supported currencies: *USDT*, *USDC*";
 
         $this->whatsappService->sendMessage($from, $reply);
         return ['success' => false, 'action' => 'send_help'];
@@ -457,9 +500,10 @@ class MessageController
         $parts = preg_split('/\s+/', trim($message));
         // Expected: ['send', '50', 'usdt', 'to', '0xabc...']
         if (count($parts) < 5 || strtolower($parts[3]) !== 'to') {
-            $this->whatsappService->sendMessage($from,
+            $this->whatsappService->sendMessage(
+                $from,
                 "⚠️ Format: *send [amount] [currency] to [address]*\n" .
-                "Example: `send 50 USDT to 0x00...`"
+                    "Example: `send 50 USDT to 0x00...`"
             );
             return ['success' => false];
         }
@@ -469,14 +513,16 @@ class MessageController
         $recipient = $parts[4];
 
         if (!is_numeric($amount) || floatval($amount) <= 0) {
-            $this->whatsappService->sendMessage($from,
+            $this->whatsappService->sendMessage(
+                $from,
                 "⚠️ Please specify a valid amount greater than 0."
             );
             return ['success' => false];
         }
 
         if (!in_array($currency, ['USDT', 'USDC'])) {
-            $this->whatsappService->sendMessage($from,
+            $this->whatsappService->sendMessage(
+                $from,
                 "⚠️ Unsupported currency *{$currency}*. Use USDT or USDC."
             );
             return ['success' => false];
@@ -496,13 +542,13 @@ class MessageController
             $recipientName = $recipientUser['username'] ?? $lookupPhone;
             $recipient     = $recipientUser['aptos_address'];
             error_log("Resolved phone $lookupPhone to address $recipient ($recipientName)");
-
         } elseif (!preg_match('/^0x[a-fA-F0-9]{60,64}$/', $recipient)) {
-            $this->whatsappService->sendMessage($from,
+            $this->whatsappService->sendMessage(
+                $from,
                 "⚠️ Invalid recipient.
 
 " .
-                "Send to a *phone number* (e.g. `2348012345678`) or an *Aptos address* (e.g. `0x1234...`)."
+                    "Send to a *phone number* (e.g. `2348012345678`) or an *Aptos address* (e.g. `0x1234...`)."
             );
             return ['success' => false, 'reason' => 'invalid_recipient'];
         }
@@ -521,9 +567,9 @@ class MessageController
 
         $toLabel = $recipientName ? "*{$recipientName}*" : "`{$recipient}`";
         $summary = "📤 *New Transaction*\n\n" .
-                   "Send: *{$amount} {$currency}*\n" .
-                   "To: {$toLabel}\n\n" .
-                   "Click below to approve with your Petra wallet.";
+            "Send: *{$amount} {$currency}*\n" .
+            "To: {$toLabel}\n\n" .
+            "Click below to approve with your Petra wallet.";
 
         $this->whatsappService->sendCTAUrlButton($from, $summary, "Approve Transaction", $url);
         return ['success' => true, 'account_type' => 'petra'];
@@ -552,9 +598,10 @@ class MessageController
     private function queueTransactionAndAskForPin($from, $user, $amount, $currency, $recipient, $recipientName = null)
     {
         if (empty($user['pin_hash'])) {
-            $this->whatsappService->sendMessage($from,
+            $this->whatsappService->sendMessage(
+                $from,
                 "⚠️ You haven't set a PIN yet.\n" .
-                "Please set a *6-digit PIN* now to enable transactions:"
+                    "Please set a *6-digit PIN* now to enable transactions:"
             );
             $this->userModel->update($from, ['awaiting_pin_setup' => 1]);
             return ['success' => false, 'reason' => 'no_pin'];
@@ -579,9 +626,9 @@ class MessageController
         $this->whatsappService->sendButtonMessage(
             $from,
             "📤 *Confirm Transaction*\n\n" .
-            "Send: *{$amount} {$currency}*\n" .
-            "To: {$displayRecipient}\n\n" .
-            "Enter your *6-digit PIN* to confirm:",
+                "Send: *{$amount} {$currency}*\n" .
+                "To: {$displayRecipient}\n\n" .
+                "Enter your *6-digit PIN* to confirm:",
             ['cancel_' . $pendingId => '❌ Cancel']
         );
 
@@ -596,7 +643,8 @@ class MessageController
         $this->updatePendingTransactionStatus($pendingTxId, 'cancelled');
         $this->userModel->clearPendingTransaction($from);
 
-        $this->whatsappService->sendMessage($from,
+        $this->whatsappService->sendMessage(
+            $from,
             "✅ Transaction cancelled.\n\nType *menu* for options."
         );
         return ['success' => true];
@@ -611,7 +659,8 @@ class MessageController
         $walletAddress = $user['aptos_address'] ?? $this->getWalletAddressByPhone($from);
 
         if (!$walletAddress) {
-            $this->whatsappService->sendMessage($from,
+            $this->whatsappService->sendMessage(
+                $from,
                 "❌ No wallet found for your account.\n\nType *hi* to get started."
             );
             return ['success' => false, 'action' => 'balance', 'error' => 'no_wallet'];
@@ -622,18 +671,20 @@ class MessageController
         $balances = $this->fetchAptosBalance($walletAddress);
 
         if ($balances === null) {
-            $this->whatsappService->sendMessage($from,
+            $this->whatsappService->sendMessage(
+                $from,
                 "❌ Failed to fetch balance. Please try again."
             );
             return ['success' => false, 'action' => 'balance', 'error' => 'fetch_failed'];
         }
 
-        $this->whatsappService->sendMessage($from,
+        $this->whatsappService->sendMessage(
+            $from,
             "*💰 Your Wallet Balance*\n\n" .
-            "💵 USDC: *\${$balances['USDC']}*\n" .
-            "💵 USDT: *\${$balances['USDT']}*\n" .
-            "⚡ APT:  *{$balances['APT']}*\n\n" .
-            "_Updated: " . date('M d, Y g:i A') . "_"
+                "💵 USDC: *\${$balances['USDC']}*\n" .
+                "💵 USDT: *\${$balances['USDT']}*\n" .
+                "⚡ APT:  *{$balances['APT']}*\n\n" .
+                "_Updated: " . date('M d, Y g:i A') . "_"
         );
 
         return ['success' => true, 'action' => 'balance'];
@@ -706,7 +757,8 @@ class MessageController
         $walletAddress = $user['aptos_address'] ?? $this->getWalletAddressByPhone($from);
 
         if (!$walletAddress) {
-            $this->whatsappService->sendMessage($from,
+            $this->whatsappService->sendMessage(
+                $from,
                 "❌ No wallet found. Type *hi* to create or import one."
             );
             return ['success' => false, 'action' => 'receive', 'error' => 'no_wallet'];
@@ -716,15 +768,16 @@ class MessageController
         usleep(300000); // small delay so messages arrive in order
         $this->whatsappService->sendMessage($from, $walletAddress);
         usleep(300000);
-        $this->whatsappService->sendMessage($from,
+        $this->whatsappService->sendMessage(
+            $from,
             "*📋 Instructions:*\n" .
-            "• Copy the address above\n" .
-            "• Share it with your sender\n" .
-            "• Ask them to send on the *Aptos network* only\n\n" .
-            "*⚠️ Important:*\n" .
-            "• Only USDC or USDT on Aptos is supported\n" .
-            "• Wrong network = lost funds\n" .
-            "• You'll be notified here when funds arrive"
+                "• Copy the address above\n" .
+                "• Share it with your sender\n" .
+                "• Ask them to send on the *Aptos network* only\n\n" .
+                "*⚠️ Important:*\n" .
+                "• Only USDC or USDT on Aptos is supported\n" .
+                "• Wrong network = lost funds\n" .
+                "• You'll be notified here when funds arrive"
         );
 
         return ['success' => true, 'action' => 'receive'];
@@ -785,20 +838,32 @@ class MessageController
     private function handleGreeting($from, $user)
     {
         $name = $user['username'] ?? 'there';
-        $this->whatsappService->sendMessage($from,
-            "Hi {$name} 🙋🏽‍♀️ I'm Sendra.\n\n" .
-            "*Main Menu*\n" .
-            "💰 Check balance — type `/balance`\n" .
-            "📤 Send USDT/USDC — type `send 50 USDT to 0x...`\n" .
-            "📥 Receive funds — type `/receive`\n" .
-            "❓ Help — type `/help`"
+
+        $message = '';
+
+        if ($user['is_logistics'] === 1) {
+            $message = "Welcome back, {$name}! 🚚\n\n";
+        }
+        else {
+            $message = "Hi {$name} 🙋🏽‍♀️ I'm Sendra.\n\n" .
+                "*Main Menu*\n" .
+                "💰 Check balance — type `/balance`\n" .
+                "📤 Send USDT/USDC — type `send 50 USDT to 0x...`\n" .
+                "📥 Receive funds — type `/receive`\n" .
+                "❓ Help — type `/help`";
+        }
+        
+        $this->whatsappService->sendMessage(
+            $from,
+            $message
         );
         return ['success' => true, 'action' => 'greeting'];
     }
 
     private function handleUnknownCommand($from)
     {
-        $this->whatsappService->sendMessage($from,
+        $this->whatsappService->sendMessage(
+            $from,
             "Sorry, I didn't understand that.\nType *menu* for available commands."
         );
         return ['success' => false, 'action' => 'unknown'];
@@ -863,18 +928,20 @@ class MessageController
             $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
         } catch (\PDOException $e) {
             error_log("handleHistoryCommand error: " . $e->getMessage());
-            $this->whatsappService->sendMessage($from,
+            $this->whatsappService->sendMessage(
+                $from,
                 "❌ Could not load history. Please try again later."
             );
             return ['success' => false];
         }
 
         if (empty($rows)) {
-            $this->whatsappService->sendMessage($from,
+            $this->whatsappService->sendMessage(
+                $from,
                 "📭 *No transactions yet.*
 
 " .
-                "Send or receive USDC/USDT to see your history here."
+                    "Send or receive USDC/USDT to see your history here."
             );
             return ['success' => true];
         }
@@ -912,16 +979,18 @@ class MessageController
     {
         // Only sendra users with a server-side key can create vouchers
         if (empty($user['encrypted_private_key'])) {
-            $this->whatsappService->sendMessage($from,
+            $this->whatsappService->sendMessage(
+                $from,
                 "⚠️ *{$recipientPhone}* is not on Sendra yet.\n\n" .
-                "Your account uses an external wallet, so vouchers are not supported.\n" .
-                "Ask them to sign up and send directly."
+                    "Your account uses an external wallet, so vouchers are not supported.\n" .
+                    "Ask them to sign up and send directly."
             );
             return ['success' => false, 'reason' => 'petra_no_voucher'];
         }
 
         if (!$this->db) {
-            $this->whatsappService->sendMessage($from,
+            $this->whatsappService->sendMessage(
+                $from,
                 "❌ Could not create voucher. Please try again."
             );
             return ['success' => false];
@@ -945,12 +1014,13 @@ class MessageController
                 'created_by'     => $from,
                 'amount'         => $amount,
                 'currency'       => $currency,
-                'recipient_phone'=> $recipientPhone,
+                'recipient_phone' => $recipientPhone,
                 'expires_at'     => $expiresAt,
             ]);
         } catch (\PDOException $e) {
             error_log("Voucher creation failed: " . $e->getMessage());
-            $this->whatsappService->sendMessage($from,
+            $this->whatsappService->sendMessage(
+                $from,
                 "❌ Could not create voucher. Please try again."
             );
             return ['success' => false];
@@ -959,14 +1029,15 @@ class MessageController
         $voucherUrl  = "https://usesendra.com/client?voucher={$token}&phoneNumber={$recipientPhone}";
         $displayPhone = $recipientPhone;
 
-        $this->whatsappService->sendMessage($from,
+        $this->whatsappService->sendMessage(
+            $from,
             "📱 *{$displayPhone}* is not on Sendra yet.\n\n" .
-            "✅ A voucher for *{$amount} {$currency}* has been created.\n\n" .
-            "👇 *Forward this link to them:*\n" .
-            "{$voucherUrl}\n\n" .
-            "When they sign up on Sendra, the *{$amount} {$currency}* will be " .
-            "automatically sent to their wallet.\n\n" .
-            "⏳ _Expires in 48 hours._"
+                "✅ A voucher for *{$amount} {$currency}* has been created.\n\n" .
+                "👇 *Forward this link to them:*\n" .
+                "{$voucherUrl}\n\n" .
+                "When they sign up on Sendra, the *{$amount} {$currency}* will be " .
+                "automatically sent to their wallet.\n\n" .
+                "⏳ _Expires in 48 hours._"
         );
 
         error_log("Voucher created: id=$voucherId phone=$recipientPhone amount=$amount $currency by=$from");
@@ -1037,7 +1108,7 @@ class MessageController
             if (!$aptosResponse || empty($aptosResponse['success'])) {
                 // Revert voucher lock so they can retry
                 $this->db->prepare("UPDATE vouchers SET status = 'pending', claimed_by = NULL, claimed_at = NULL WHERE id = ?")
-                         ->execute([$voucher['id']]);
+                    ->execute([$voucher['id']]);
                 error_log("Voucher claim: aptos-service failed for $recipientPhone: " . json_encode($aptosResponse));
                 return ['success' => false, 'message' => 'Could not create wallet. Please try again.'];
             }
@@ -1057,10 +1128,10 @@ class MessageController
             $this->whatsappService->sendButtonMessage(
                 $recipientPhone,
                 "🔐 *Your Sendra wallet has been created!*\n\n" .
-                "📍 *Address:*\n`{$recipientAddress}`\n\n" .
-                "🔑 *Backup Key — save this now, shown only once:*\n" .
-                "`{$aptosResponse['private_key_for_display']}`\n\n" .
-                "⚠️ Store this somewhere safe. Tap below once saved.",
+                    "📍 *Address:*\n`{$recipientAddress}`\n\n" .
+                    "🔑 *Backup Key — save this now, shown only once:*\n" .
+                    "`{$aptosResponse['private_key_for_display']}`\n\n" .
+                    "⚠️ Store this somewhere safe. Tap below once saved.",
                 ['key_saved' => "✅ I've saved it"]
             );
 
@@ -1096,7 +1167,7 @@ class MessageController
 
             // Save tx_hash on voucher
             $this->db->prepare("UPDATE vouchers SET tx_hash = ? WHERE id = ?")
-                     ->execute([$hash, $voucher['id']]);
+                ->execute([$hash, $voucher['id']]);
 
             // Record in transaction history for both sides
             $this->recordTransaction([
@@ -1128,25 +1199,26 @@ class MessageController
             $recipientName = $recipientUser['username'] ?? $recipientPhone;
 
             // Notify sender
-            $this->whatsappService->sendMessage($voucher['created_by'],
+            $this->whatsappService->sendMessage(
+                $voucher['created_by'],
                 "✅ *Voucher Claimed!*\n\n" .
-                "*{$recipientName}* signed up and received your " .
-                "*{$voucher['amount']} {$voucher['currency']}*.\n\n" .
-                "🔗 https://explorer.aptoslabs.com/txn/{$hash}?network=testnet"
+                    "*{$recipientName}* signed up and received your " .
+                    "*{$voucher['amount']} {$voucher['currency']}*.\n\n" .
+                    "🔗 https://explorer.aptoslabs.com/txn/{$hash}?network=testnet"
             );
 
             // Notify recipient — mention sender by name
-            $this->whatsappService->sendMessage($recipientPhone,
+            $this->whatsappService->sendMessage(
+                $recipientPhone,
                 "🎉 *You received a voucher!*\n\n" .
-                "*{$senderName}* sent you *{$voucher['amount']} {$voucher['currency']}* " .
-                "and it has been credited to your wallet.\n\n" .
-                "💰 Type *balance* to check your wallet.\n" .
-                "📋 Type *history* to see your transactions."
+                    "*{$senderName}* sent you *{$voucher['amount']} {$voucher['currency']}* " .
+                    "and it has been credited to your wallet.\n\n" .
+                    "💰 Type *balance* to check your wallet.\n" .
+                    "📋 Type *history* to see your transactions."
             );
 
             error_log("Voucher claimed: {$voucher['id']} by $recipientPhone tx=$hash");
             return ['success' => true, 'tx_hash' => $hash];
-
         } else {
             // Revert voucher so they can try again
             $this->db->prepare("
@@ -1158,5 +1230,4 @@ class MessageController
             return ['success' => false, 'message' => $error];
         }
     }
-
 }

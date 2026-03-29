@@ -48,14 +48,14 @@ class User
      * Create new user
      * Supports both sendra-native (with encrypted key) and petra users
      */
-    public function create($phoneNumber, $username, $aptosAddress, $encryptedPrivateKey = null, $accountType = 'sendra')
+    public function create($phoneNumber, $username, $aptosAddress, $encryptedPrivateKey = null, $accountType = 'sendra', $isLogistics = false)
     {
         try {
             $stmt = $this->db->prepare("
                 INSERT INTO {$this->table}
-                    (phone_number, username, aptos_address, encrypted_private_key, account_type, wallet_connected, created_at)
+                    (phone_number, username, aptos_address, encrypted_private_key, account_type, wallet_connected, created_at, is_logistics)
                 VALUES
-                    (:phone, :username, :aptos_address, :encrypted_private_key, :account_type, 1, NOW())
+                    (:phone, :username, :aptos_address, :encrypted_private_key, :account_type, 1, NOW(), :is_logistics)
             ");
 
             $stmt->execute([
@@ -64,6 +64,7 @@ class User
                 'aptos_address'         => $aptosAddress,
                 'encrypted_private_key' => $encryptedPrivateKey,
                 'account_type'          => $accountType,
+                'is_logistics'          => $isLogistics,
             ]);
 
             return $this->db->lastInsertId();

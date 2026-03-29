@@ -26,7 +26,7 @@ class AuthController
      * @param string|null $encryptedPrivateKey  — null for petra users
      * @param string      $accountType          — 'sendra' or 'petra'
      */
-    public function signup($phoneNumber, $username, $aptosAddress, $encryptedPrivateKey = null, $accountType = 'sendra')
+    public function signup($phoneNumber, $username, $aptosAddress, $encryptedPrivateKey = null, $accountType = 'sendra', $isLogistics = false)
     {
         // Block duplicate phone numbers
         if ($this->userModel->exists($phoneNumber)) {
@@ -46,11 +46,13 @@ class AuthController
             ];
         }
 
-        $userId = $this->userModel->create($phoneNumber, $username, $aptosAddress, $encryptedPrivateKey, $accountType);
+        $userId = $this->userModel->create($phoneNumber, $username, $aptosAddress, $encryptedPrivateKey, $accountType, $isLogistics ? 1 : 0);
 
         if ($userId) {
             error_log("New {$accountType} user registered: {$username} ({$phoneNumber})");
-            $this->whatsappService->sendSignupSuccessMessage($phoneNumber, $username);
+            if (!$isLogistics) {
+                $this->whatsappService->sendSignupSuccessMessage($phoneNumber, $username);
+            }
             return [
                 'success'  => true,
                 'message'  => 'User registered successfully',
