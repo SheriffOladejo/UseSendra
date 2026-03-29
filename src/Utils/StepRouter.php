@@ -25,7 +25,7 @@ use App\Steps\User\ConfirmationStep;
 use App\Steps\User\PriceOfferStep;
 use App\Steps\User\PaymentMethodStep;
 
-use App\Steps\ConfirmRequestStep;
+use App\Steps\User\FindCourierStep;
 use App\Steps\Driver\LocationPreferenceStep;
 use App\Steps\Driver\VehicleTypeStep;
 use App\Steps\Driver\ReadyStep;
@@ -75,6 +75,7 @@ class StepRouter
         'sender_phone' => SenderPhoneStep::class,
         'receiver_phone' => ReceiverPhoneStep::class,
         'sender_vehicle_type' => UserVehicleTypeStep::class,
+        'find_courier' => FindCourierStep::class,
 
         'price_offer' => PriceOfferStep::class,
         'payer' => PayerStep::class,
