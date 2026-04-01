@@ -18,5 +18,8 @@ return array(
     'Nyholm\\Psr7\\' => array($vendorDir . '/nyholm/psr7/src'),
     'Http\\Message\\MultipartStream\\' => array($vendorDir . '/php-http/multipart-stream-builder/src'),
     'Http\\Discovery\\' => array($vendorDir . '/php-http/discovery/src'),
+    'Endroid\\QrCode\\' => array($vendorDir . '/endroid/qr-code/src'),
+    'DASPRiD\\Enum\\' => array($vendorDir . '/dasprid/enum/src'),
+    'BaconQrCode\\' => array($vendorDir . '/bacon/bacon-qr-code/src'),
     'App\\' => array($baseDir . '/src'),
 );

@@ -28,17 +28,10 @@ class PickupNotesStep extends BaseStep
         ]);
 
         // Move to dropoff location step
-        $this->nextStep($phone, 'dropoff_location');
+        $this->nextStep($phone, 'dropoff_address');
 
-        $this->whatsappService->sendMessage(
-            $phone,
-            "Thanks! Now, please send the drop-off location using whatsapp location sharing:\n" .
-            "1. Tap the '+' icon\n" .
-            "2. Select 'Location'\n" .
-            "3. Pick a spot on the map"
-        );
-
-        return '';
+        return "Thanks! Now we need to know where it is going?
+                \nEnter the delivery address (e.g. *765 Fola Osibo, Lekki Phase 1, Lagos*)";
     }
 
     public function validateInput(string $message): bool

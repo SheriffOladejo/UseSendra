@@ -3,28 +3,34 @@
 namespace App\Steps\Driver;
 
 use App\Steps\BaseStep;
+use App\Utils\Translator;
 
 class NinStep extends BaseStep
 {
     public function handle(array $session, string $message): string
     {
-        $nin = preg_replace('/\D/', '', $message);
+        $nin  = preg_replace('/\D/', '', $message);
+        $phone = $session['phone_number'];
+        $lang  = $session['language'] ?? 'en';
+        $t     = new Translator($lang);
 
-        $this->driverModel->update($session['phone_number'], [
-            'nin' => $nin
-        ]);
+        $this->driverModel->update($phone, ['nin' => $nin]);
 
-        $this->nextStep($session['phone_number'], 'driver_id');
-        
-        return "Nice, Now upload a picture of your *rider's card/drivers license or hackney permit*";
+        $this->nextStep($phone, 'driver_id');
+
+        return $t->get('nin_prompt');
     }
 
     public function validateInput(string $nin): bool
     {
+        $lang = $this->session['language'] ?? 'en';
+        $t    = new Translator($lang);
+
         if (preg_match('/^\d{11}$/', $nin)) {
             return true;
         }
-        $this->validationError = "Please enter a valid 11-digit NIN number.";
+
+        $this->validationError = $t->get('nin_invalid');
         return false;
     }
 }

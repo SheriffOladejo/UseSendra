@@ -40,6 +40,18 @@ class ComposerStaticInit3269a2b819e22bcd34c139383c3e98da
             'Http\\Message\\MultipartStream\\' => 29,
             'Http\\Discovery\\' => 15,
         ),
+        'E' => 
+        array (
+            'Endroid\\QrCode\\' => 15,
+        ),
+        'D' => 
+        array (
+            'DASPRiD\\Enum\\' => 13,
+        ),
+        'B' => 
+        array (
+            'BaconQrCode\\' => 12,
+        ),
         'A' => 
         array (
             'App\\' => 4,
@@ -95,6 +107,18 @@ class ComposerStaticInit3269a2b819e22bcd34c139383c3e98da
         'Http\\Discovery\\' => 
         array (
             0 => __DIR__ . '/..' . '/php-http/discovery/src',
+        ),
+        'Endroid\\QrCode\\' => 
+        array (
+            0 => __DIR__ . '/..' . '/endroid/qr-code/src',
+        ),
+        'DASPRiD\\Enum\\' => 
+        array (
+            0 => __DIR__ . '/..' . '/dasprid/enum/src',
+        ),
+        'BaconQrCode\\' => 
+        array (
+            0 => __DIR__ . '/..' . '/bacon/bacon-qr-code/src',
         ),
         'App\\' => 
         array (

@@ -31,12 +31,10 @@ class PaymentMethodStep extends BaseStep
         $summary .= "📦 Item: {$request['item_name']}\n";
         $summary .= "📝 Description: {$request['item_description']}\n";
         $summary .= "📍 Pickup Location:\n";
-        $summary .= "Latitude: {$request['pickup_lat']}\n";
-        $summary .= "Longitude: {$request['pickup_lng']}\n";
+        $summary .= "Address: {$request['pickup_address']}\n";
         $summary .= "Notes: {$request['pickup_notes']}\n\n";
         $summary .= "📍 Drop-off Location:\n";
-        $summary .= "Latitude: {$request['dropoff_lat']}\n";
-        $summary .= "Longitude: {$request['dropoff_lng']}\n";
+        $summary .= "Address: {$request['dropoff_address']}\n";
         $summary .= "Notes: {$request['dropoff_notes']}\n\n";
         $summary .= "📞 Sender: {$request['sender_phone']}\n";
         $summary .= "📞 Receiver: {$request['receiver_phone']}\n";

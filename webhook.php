@@ -41,7 +41,7 @@ if (!$bot) {
 
 $botConfig = $botConfigs[$incomingPhoneNumberId] ?? $botConfigs[$SENDRA_APTOS_PHONE_ID];
 
-$db = Database::getInstance($bot['db_config'])->getConnection();
+$db = Database::getInstance($botConfig['db_config'])->getConnection();
 $whatsappService = new WhatsAppService($ACCESS_TOKEN, $incomingPhoneNumberId);
 
 $authController  = new AuthController($db, $whatsappService);

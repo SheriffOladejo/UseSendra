@@ -3,15 +3,20 @@
 namespace App\Steps\Driver;
 
 use App\Steps\BaseStep;
+use App\Utils\Translator;
 
 class ReadyStep extends BaseStep
 {
+    protected string $validationError;
+
     /**
      * Handle final rider onboarding confirmation
      */
     public function handle(array $session, $message): string
     {
         $phone = $session['phone_number'];
+        $lang  = $session['language'] ?? 'en';
+        $t     = new Translator($lang);
 
         // Update rider status in DB to 'ready'
         $this->driverModel->update($phone, [
@@ -19,31 +24,28 @@ class ReadyStep extends BaseStep
         ]);
 
         // Mark step as complete
-        $this->nextStep($phone, 'in_review');
+        //$this->nextStep($phone, 'rider_ready');
 
-        $createdAt = strtotime($driver['created_at'] ?? 'now');
+        // Send review info message (multilingual)
+        $this->whatsappService->sendMessage(
+            $phone,
+            $t->get('in_review_message')
+        );
 
-                return "⏳ *Application Status: Under Review*\n\nYour application submitted " . $this->formatTimeAgo($createdAt) . " is currently being reviewed by our team.\n\n📋 *What we're verifying:*
-✓ Driver's license
-✓ Vehicle registration
-✓ Identity documents
-✓ Background check
-
-⏱️ *Expected review time:* 24-48 hours
-
-We'll send you a WhatsApp notification once your account is approved!
-
-💡 *Need help?* Type *'support'* to contact our team.";
+        return '';
     }
 
     /**
-     * Validate input for this step (any input is fine since it's just a confirmation)
+     * Validate input for this step (any input is fine)
      */
     public function validateInput($message): bool
     {
         return true;
     }
 
+    /**
+     * Optional: format timestamp into "x minutes/hours/days ago"
+     */
     private function formatTimeAgo(int $timestamp): string
     {
         $diff = time() - $timestamp;

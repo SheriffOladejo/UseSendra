@@ -32,7 +32,7 @@ class ConfirmationStep extends BaseStep
         };
 
         $this->deliveryRequestModel->update($requestId, [
-            'status' => 'confirmed'
+            'status' => 'searching_driver',
         ]);
 
         $this->nextStep($phone, 'find_courier');

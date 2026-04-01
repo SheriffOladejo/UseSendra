@@ -24,7 +24,6 @@ class LogisticsDriver
             $stmt->execute(['phone' => $phone]);
 
             return $stmt->fetch(PDO::FETCH_ASSOC);
-
         } catch (\PDOException $e) {
             error_log("Error finding driver: " . $e->getMessage());
             return false;
@@ -41,11 +40,43 @@ class LogisticsDriver
             $stmt->execute(['id' => $id]);
 
             return $stmt->fetch(PDO::FETCH_ASSOC);
-
         } catch (\PDOException $e) {
             error_log("Error finding driver by ID: " . $e->getMessage());
             return false;
         }
+    }
+
+    /**
+     * Find driver by Distance
+     */
+    public function findNearby($lat, $lng, $radius = 5)
+    {
+        $sql = "
+    SELECT *,
+    (
+        6371 * acos(
+            cos(radians(:lat))
+            * cos(radians(preferred_latitude))
+            * cos(radians(preferred_longitude) - radians(:lng))
+            + sin(radians(:lat))
+            * sin(radians(preferred_latitude))
+        )
+    ) AS distance
+    FROM drivers
+    HAVING distance < :radius
+    ORDER BY distance
+    LIMIT 10
+    ";
+
+        $stmt = $this->db->prepare($sql);
+
+        $stmt->execute([
+            'lat' => $lat,
+            'lng' => $lng,
+            'radius' => $radius
+        ]);
+
+        return $stmt->fetchAll(\PDO::FETCH_ASSOC);
     }
 
     /**
@@ -70,7 +101,6 @@ class LogisticsDriver
             ]);
 
             return $this->db->lastInsertId();
-
         } catch (\PDOException $e) {
             error_log("Error creating driver: " . $e->getMessage());
             return false;
@@ -99,7 +129,6 @@ class LogisticsDriver
             $stmt = $this->db->prepare($sql);
 
             return $stmt->execute($params);
-
         } catch (\PDOException $e) {
             error_log("Error updating driver: " . $e->getMessage());
             return false;
@@ -123,7 +152,6 @@ class LogisticsDriver
                 'online' => $isOnline,
                 'id'     => $driverId
             ]);
-
         } catch (\PDOException $e) {
             error_log("Error updating driver online status: " . $e->getMessage());
             return false;
@@ -153,7 +181,6 @@ class LogisticsDriver
             ");
 
             return $stmt->execute(['id' => $driverId]);
-
         } catch (\PDOException $e) {
             error_log("Error incrementing driver trips: " . $e->getMessage());
             return false;

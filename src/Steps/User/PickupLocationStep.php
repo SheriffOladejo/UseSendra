@@ -15,6 +15,11 @@ class PickupLocationStep extends BaseStep
     public function handle(array $session, string $message): string
     {
         $phone = $session['phone_number'];
+        $requestId = $session['delivery_request_id'] ?? null;
+
+        if (!$requestId) {
+            return "We couldn't find your delivery request. Please start again.";
+        }
 
         // Try to parse coordinates from message
         $coordinates = $this->parseCoordinates($message);
@@ -25,17 +30,10 @@ class PickupLocationStep extends BaseStep
 
         [$latitude, $longitude] = $coordinates;
 
-        $user = $this->userModel->findByPhone($phone);
-
-        $requestId = $this->deliveryRequestModel->create([
-            'user_id' => $user['id'],
+        $requestId = $this->deliveryRequestModel->update($requestId, [
             'sender_phone' => $phone,
             'pickup_lat'  => $latitude,
             'pickup_lng' => $longitude
-        ]);
-
-        $this->sessionModel->update($phone, [
-            'delivery_request_id' => $requestId
         ]);
 
         // Move to next step

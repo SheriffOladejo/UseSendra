@@ -24,12 +24,16 @@ class Database {
         }
     }
 
-    public static function getInstance($config) {
+    /**
+     * $useReplica = true to use replica DB instead of live
+     */
+    public static function getInstance(array $config, bool $useReplica = false) {
 
-        $key = $config['name']; // unique DB key
+        $dbConfig = $useReplica ? $config['replica'] : $config['live'];
+        $key = $dbConfig['name'];
 
         if (!isset(self::$instances[$key])) {
-            self::$instances[$key] = new self($config);
+            self::$instances[$key] = new self($dbConfig);
         }
 
         return self::$instances[$key];

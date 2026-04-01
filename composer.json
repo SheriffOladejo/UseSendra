@@ -2,7 +2,8 @@
     "require": {
         "openai-php/client": "^0.16.1",
         "symfony/http-client": "^7.3",
-        "nyholm/psr7": "^1.8"
+        "nyholm/psr7": "^1.8",
+        "endroid/qr-code": "^6.0"
     },
     "autoload": {
         "psr-4": {

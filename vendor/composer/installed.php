@@ -1,22 +1,49 @@
 <?php return array(
     'root' => array(
-        'pretty_version' => '1.0.0+no-version-set',
-        'version' => '1.0.0.0',
+        'pretty_version' => 'dev-main',
+        'version' => 'dev-main',
         'type' => 'library',
         'install_path' => __DIR__ . '/../../',
         'aliases' => array(),
-        'reference' => NULL,
+        'reference' => '0f9d668ecb36e85c591fbe82185c157d44169a06',
         'name' => '__root__',
         'dev' => true,
     ),
     'versions' => array(
         '__root__' => array(
-            'pretty_version' => '1.0.0+no-version-set',
-            'version' => '1.0.0.0',
+            'pretty_version' => 'dev-main',
+            'version' => 'dev-main',
             'type' => 'library',
             'install_path' => __DIR__ . '/../../',
             'aliases' => array(),
-            'reference' => NULL,
+            'reference' => '0f9d668ecb36e85c591fbe82185c157d44169a06',
+            'dev_requirement' => false,
+        ),
+        'bacon/bacon-qr-code' => array(
+            'pretty_version' => 'v3.0.4',
+            'version' => '3.0.4.0',
+            'type' => 'library',
+            'install_path' => __DIR__ . '/../bacon/bacon-qr-code',
+            'aliases' => array(),
+            'reference' => '3feed0e212b8412cc5d2612706744789b0615824',
+            'dev_requirement' => false,
+        ),
+        'dasprid/enum' => array(
+            'pretty_version' => '1.0.7',
+            'version' => '1.0.7.0',
+            'type' => 'library',
+            'install_path' => __DIR__ . '/../dasprid/enum',
+            'aliases' => array(),
+            'reference' => 'b5874fa9ed0043116c72162ec7f4fb50e02e7cce',
+            'dev_requirement' => false,
+        ),
+        'endroid/qr-code' => array(
+            'pretty_version' => '6.0.9',
+            'version' => '6.0.9.0',
+            'type' => 'library',
+            'install_path' => __DIR__ . '/../endroid/qr-code',
+            'aliases' => array(),
+            'reference' => '21e888e8597440b2205e2e5c484b6c8e556bcd1a',
             'dev_requirement' => false,
         ),
         'nyholm/psr7' => array(
@@ -110,8 +137,8 @@
         'psr/http-factory-implementation' => array(
             'dev_requirement' => false,
             'provided' => array(
-                0 => '*',
-                1 => '1.0',
+                0 => '1.0',
+                1 => '*',
             ),
         ),
         'psr/http-message' => array(
@@ -126,8 +153,8 @@
         'psr/http-message-implementation' => array(
             'dev_requirement' => false,
             'provided' => array(
-                0 => '*',
-                1 => '1.0',
+                0 => '1.0',
+                1 => '*',
             ),
         ),
         'psr/log' => array(

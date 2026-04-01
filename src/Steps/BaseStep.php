@@ -6,15 +6,17 @@ use App\Models\LogisticsDriver;
 use App\Models\LogisticsUser;
 use App\Models\DeliveryRequest;
 use App\Services\WhatsAppService;
+use App\Utils\Translator;   
 
 abstract class BaseStep implements StepInterface
 {
     protected $sessionModel;
+    protected array $session = [];
     protected $whatsappService;
     protected $driverModel;
     protected $userModel;
     protected $deliveryRequestModel;
-    protected string $validationError = "⚠️ Invalid input. Please try again.";
+    protected string $validationError;
     protected string $username = "";
 
     public function __construct(
@@ -22,13 +24,15 @@ abstract class BaseStep implements StepInterface
         WhatsAppService $whatsappService,
         LogisticsDriver $driverModel,
         LogisticsUser $userModel,
-        DeliveryRequest $deliveryRequestModel
+        DeliveryRequest $deliveryRequestModel,
+        array $session = []
     ) {
         $this->sessionModel = $sessionModel;
         $this->whatsappService = $whatsappService;
         $this->driverModel = $driverModel;
         $this->userModel = $userModel;
         $this->deliveryRequestModel = $deliveryRequestModel;
+
     }
 
     public function validateInput(string $message): bool
@@ -54,6 +58,16 @@ abstract class BaseStep implements StepInterface
     public function setUsername(string $username): void
     {
         $this->username = $username;
+    }
+
+    public function setSession(array $session): void
+    {
+        $this->session = $session;
+        // Get language from session if available, else default to 'en'
+        $lang = $session['language'] ?? 'en';
+
+        $translator = new Translator($lang);
+        $this->validationError = $translator->get('invalid_input');
     }
 
 }

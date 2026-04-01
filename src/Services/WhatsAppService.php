@@ -30,6 +30,94 @@ class WhatsAppService
     }
 
     /**
+     * Send image message
+     * 
+     * @param string $to Receiver phone number
+     * @param string $imagePath Local file path or public URL
+     * @param string $caption Optional caption text
+     */
+    public function sendImage($to, $imagePath, $caption = '')
+    {
+        $url = "https://graph.facebook.com/v20.0/{$this->phoneNumberId}/messages";
+
+        // Check if it's a URL or local file path
+        if (filter_var($imagePath, FILTER_VALIDATE_URL)) {
+            // It's a URL - send directly
+            $imageData = [
+                "link" => $imagePath
+            ];
+        } else {
+            // It's a local file - upload first, then send
+            $mediaId = $this->uploadMedia($imagePath);
+
+            if (!$mediaId) {
+                return false;
+            }
+
+            $imageData = [
+                "id" => $mediaId
+            ];
+        }
+
+        // Add caption if provided
+        if (!empty($caption)) {
+            $imageData['caption'] = $caption;
+        }
+
+        $payload = json_encode([
+            "messaging_product" => "whatsapp",
+            "to" => $to,
+            "type" => "image",
+            "image" => $imageData
+        ]);
+
+        return $this->makeRequest($url, $payload);
+    }
+
+    /**
+     * Upload media file to WhatsApp
+     * 
+     * @param string $filePath Local file path
+     * @return string|false Media ID or false on failure
+     */
+    private function uploadMedia($filePath)
+    {
+        if (!file_exists($filePath)) {
+            error_log("File not found: {$filePath}");
+            return false;
+        }
+
+        $url = "https://graph.facebook.com/v20.0/{$this->phoneNumberId}/media";
+
+        $curl = curl_init();
+
+        curl_setopt_array($curl, [
+            CURLOPT_URL => $url,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_POST => true,
+            CURLOPT_HTTPHEADER => [
+                "Authorization: Bearer {$this->accessToken}"
+            ],
+            CURLOPT_POSTFIELDS => [
+                'messaging_product' => 'whatsapp',
+                'file' => new \CURLFile($filePath, mime_content_type($filePath), basename($filePath))
+            ]
+        ]);
+
+        $response = curl_exec($curl);
+        $httpCode = curl_getinfo($curl, CURLINFO_HTTP_CODE);
+        curl_close($curl);
+
+        if ($httpCode === 200) {
+            $data = json_decode($response, true);
+            return $data['id'] ?? false;
+        }
+
+        error_log("Media upload failed: {$response}");
+        return false;
+    }
+
+    /**
      * Send welcome message to new user
      */
     public function sendWelcomeMessage($to, $userName)
@@ -286,104 +374,104 @@ class WhatsAppService
         return $this->sendMessage($to, $message);
     }
 
-/**
- * Download media from WhatsApp in two steps:
- * 1. Get the media URL from media ID
- * 2. Download the actual media content
- */
-public function downloadMedia(string $mediaId): string
-{
-    error_log("Starting media download for ID: $mediaId");
+    /**
+     * Download media from WhatsApp in two steps:
+     * 1. Get the media URL from media ID
+     * 2. Download the actual media content
+     */
+    public function downloadMedia(string $mediaId): string
+    {
+        error_log("Starting media download for ID: $mediaId");
 
-    // Step 1: Get the media URL from the media ID
-    $mediaUrl = $this->getMediaUrl($mediaId);
-    
-    error_log("Media URL retrieved: $mediaUrl");
+        // Step 1: Get the media URL from the media ID
+        $mediaUrl = $this->getMediaUrl($mediaId);
 
-    // Step 2: Download the actual media content
-    return $this->downloadMediaContent($mediaUrl);
-}
+        error_log("Media URL retrieved: $mediaUrl");
 
-/**
- * Step 1: Get media URL from media ID
- */
-private function getMediaUrl(string $mediaId): string
-{
-    $url = "https://graph.facebook.com/v21.0/{$mediaId}";
-    
-    $ch = curl_init($url);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_HTTPHEADER, [
-        'Authorization: Bearer ' . $this->accessToken
-    ]);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 30);
-
-    $response = curl_exec($ch);
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    $curlError = curl_error($ch);
-    $curlErrno = curl_errno($ch);
-    
-    curl_close($ch);
-
-    if ($curlErrno) {
-        error_log("cURL error getting media URL ($curlErrno): $curlError");
-        throw new \Exception("cURL error: $curlError");
+        // Step 2: Download the actual media content
+        return $this->downloadMediaContent($mediaUrl);
     }
 
-    if ($httpCode !== 200) {
-        error_log("Failed to get media URL. HTTP Code: $httpCode. Response: " . $response);
-        throw new \Exception("Failed to get media URL. HTTP Code: $httpCode");
+    /**
+     * Step 1: Get media URL from media ID
+     */
+    private function getMediaUrl(string $mediaId): string
+    {
+        $url = "https://graph.facebook.com/v21.0/{$mediaId}";
+
+        $ch = curl_init($url);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+            'Authorization: Bearer ' . $this->accessToken
+        ]);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+
+        $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $curlError = curl_error($ch);
+        $curlErrno = curl_errno($ch);
+
+        curl_close($ch);
+
+        if ($curlErrno) {
+            error_log("cURL error getting media URL ($curlErrno): $curlError");
+            throw new \Exception("cURL error: $curlError");
+        }
+
+        if ($httpCode !== 200) {
+            error_log("Failed to get media URL. HTTP Code: $httpCode. Response: " . $response);
+            throw new \Exception("Failed to get media URL. HTTP Code: $httpCode");
+        }
+
+        $data = json_decode($response, true);
+
+        if (!isset($data['url'])) {
+            error_log("No URL in media response: " . $response);
+            throw new \Exception("Media URL not found in response");
+        }
+
+        return $data['url'];
     }
 
-    $data = json_decode($response, true);
-    
-    if (!isset($data['url'])) {
-        error_log("No URL in media response: " . $response);
-        throw new \Exception("Media URL not found in response");
+    /**
+     * Step 2: Download the actual media file
+     */
+    private function downloadMediaContent(string $mediaUrl): string
+    {
+        error_log("Downloading media content from: $mediaUrl");
+
+        $ch = curl_init($mediaUrl);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+            'Authorization: Bearer ' . $this->accessToken
+        ]);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+        curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+
+        $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $contentType = curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
+        $curlError = curl_error($ch);
+        $curlErrno = curl_errno($ch);
+
+        curl_close($ch);
+
+        // Log everything useful
+        error_log("Media download HTTP code: $httpCode");
+        error_log("Media content-type: $contentType");
+
+        if ($curlErrno) {
+            error_log("cURL error downloading media ($curlErrno): $curlError");
+            throw new \Exception("cURL error: $curlError");
+        }
+
+        if ($httpCode !== 200) {
+            error_log("Media download failed. Response length: " . strlen($response));
+            throw new \Exception("Failed to download media from WhatsApp. HTTP Code: $httpCode");
+        }
+
+        error_log("Media downloaded successfully. Size: " . strlen($response) . " bytes");
+
+        return $response;
     }
-
-    return $data['url'];
-}
-
-/**
- * Step 2: Download the actual media file
- */
-private function downloadMediaContent(string $mediaUrl): string
-{
-    error_log("Downloading media content from: $mediaUrl");
-
-    $ch = curl_init($mediaUrl);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_HTTPHEADER, [
-        'Authorization: Bearer ' . $this->accessToken
-    ]);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 30);
-    curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
-
-    $response = curl_exec($ch);
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    $contentType = curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
-    $curlError = curl_error($ch);
-    $curlErrno = curl_errno($ch);
-    
-    curl_close($ch);
-
-    // Log everything useful
-    error_log("Media download HTTP code: $httpCode");
-    error_log("Media content-type: $contentType");
-
-    if ($curlErrno) {
-        error_log("cURL error downloading media ($curlErrno): $curlError");
-        throw new \Exception("cURL error: $curlError");
-    }
-
-    if ($httpCode !== 200) {
-        error_log("Media download failed. Response length: " . strlen($response));
-        throw new \Exception("Failed to download media from WhatsApp. HTTP Code: $httpCode");
-    }
-
-    error_log("Media downloaded successfully. Size: " . strlen($response) . " bytes");
-    
-    return $response;
-}
 }

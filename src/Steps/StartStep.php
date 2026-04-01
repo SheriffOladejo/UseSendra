@@ -6,30 +6,59 @@ use App\Steps\BaseStep;
 
 class StartStep extends BaseStep
 {
-    public function handle(array $session, $message): string
+    protected array $languages = [
+        'yo' => '🇳🇬 Yoruba',
+        'ig' => '🇳🇬 Igbo',
+        'ha' => '🇳🇬 Hausa',
+        'en' => '🇬🇧 English'
+    ];
+
+    public function handle(array $session, string $message): string
     {
         $phone = $session['phone_number'];
-
-        // Move user to role selection
-        $this->nextStep($phone, 'choose_role');
-
         $name = $this->getUsername() ?? 'there';
 
-        // Send buttons
+        // Move user to language selection step
+        $this->nextStep($phone, 'language');
+
+        // Split buttons into batches of 3 for WhatsApp
+        $keys = array_keys($this->languages);
+        $firstBatch = array_slice($keys, 0, 3);
+        $secondBatch = array_slice($keys, 3);
+
+        $buttons1 = [];
+        foreach ($firstBatch as $key) {
+            $buttons1[$key] = $this->languages[$key];
+        }
+
         $this->whatsappService->sendButtonMessage(
             $phone,
-            "Hello 🙋🏽‍♀️ $name! Welcome to *Sendra Courier* \n\nLet’s get you set up real quick.\n\nAre you here to send packages or deliver them?",
-            [
-                "sender" => "📦 Send Package",
-                "rider"  => "🏍 Delivery Rider"
-            ]
+            "Hello 🙋🏽‍♀️ $name! Welcome to *Sendra Logistics* 🌟\nPlease select your preferred language:",
+            $buttons1
         );
+
+        if (!empty($secondBatch)) {
+            $buttons2 = [];
+            foreach ($secondBatch as $key) {
+                $buttons2[$key] = $this->languages[$key];
+            }
+
+            $this->whatsappService->sendButtonMessage(
+                $phone,
+                "More languages:",
+                $buttons2
+            );
+        }
 
         return '';
     }
 
     public function validateInput($message): bool
     {
-        return true;
+        // Accept any greeting or non-empty text
+        $greetings = ['hi', 'hello', 'hey', 'hola', 'howdy'];
+        $text = strtolower(trim($message));
+
+        return !empty($text) && (in_array($text, $greetings) || strlen($text) > 1);
     }
 }

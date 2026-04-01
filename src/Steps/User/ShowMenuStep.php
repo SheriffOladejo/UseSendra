@@ -18,10 +18,10 @@ class ShowMenuStep extends BaseStep
         switch ($choice) {
             case 'send':
             case '📦':
-                $this->nextStep($phone, 'pickup_location');
+                $this->nextStep($phone, 'pickup_address');
                 return "Nice, let's get this moving. 📦
                 \nFirst, where are we picking up from?
-                \nPlease use WhatsApp's location sharing feature:\n1. Tap the '+' icon\n2. Select 'Location'\n3. Choose 'Send your current location' or pick a spot on the map";
+                \nEnter the pickup address (e.g. *123 Allen Avenue, Ikeja, Lagos*):";
 
             case 'order':
             case 'track':

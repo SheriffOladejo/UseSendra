@@ -8,7 +8,7 @@ class PlateNumberStep extends BaseStep
 {
     public function handle(array $session, string $message): string
     {
-        $plateNumber = strtoupper(trim($message));
+        $plateNumber = strtoupper(str_replace(' ', '', trim($message)));
 
         $this->driverModel->update($session['phone_number'], [
             'vehicle_plate_number' => $plateNumber

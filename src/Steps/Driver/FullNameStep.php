@@ -3,6 +3,7 @@
 namespace App\Steps\Driver;
 
 use App\Steps\BaseStep;
+use App\Utils\Translator;
 
 class FullNameStep extends BaseStep
 {
@@ -12,11 +13,13 @@ class FullNameStep extends BaseStep
     public function handle(array $session, $message): string
     {
         $phone = $session['phone_number'];
+        $lang  = $session['language'] ?? 'en';
+        $t     = new Translator($lang);
 
         $name = trim($message);
 
         if (!$this->validateInput($name)) {
-            return "Please enter your full name (e.g. *Chinedu Sani Adeyemi*).";
+            return $t->get('enter_full_name');
         }
 
         // Split name
@@ -35,6 +38,7 @@ class FullNameStep extends BaseStep
                 $lastName,
                 null
             );
+
         } else {
 
             $this->driverModel->update($phone, [
@@ -46,17 +50,19 @@ class FullNameStep extends BaseStep
         // Move to next step
         $this->nextStep($phone, 'rider_phone');
 
-        return "Nice to meet you *{$firstName}*! 🚴\n\nWhat phone number should customers call you on?";
+        return $t->get('nice_to_meet_you', [
+            'name' => $firstName
+        ]);
     }
 
     /**
      * Validate name input
      */
-    public function validateInput($message): bool
+    public function validateInput($message, $lang = 'en'): bool
     {
         $name = trim($message);
-
-        // Require at least first and last name
+        $t = new Translator($lang);
+        $this->validationError = $t->get('enter_full_name');
         return preg_match('/^[a-zA-Z]+\s+[a-zA-Z]+/', $name);
     }
 }

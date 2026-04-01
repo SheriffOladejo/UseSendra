@@ -7,6 +7,7 @@ use App\Models\LogisticsDriver;
 use App\Models\LogisticsUser;
 use App\Models\DeliveryRequest;
 use App\Services\WhatsAppService;
+use App\Utils\Translator;
 
 class ChooseRoleStep extends BaseStep
 {
@@ -17,7 +18,6 @@ class ChooseRoleStep extends BaseStep
         LogisticsUser $userModel,
         DeliveryRequest $deliveryRequestModel
     ) {
-        // Initialize the BaseStep constructor
         parent::__construct($sessionModel, $whatsappService, $driverModel, $userModel, $deliveryRequestModel);
     }
 
@@ -25,6 +25,9 @@ class ChooseRoleStep extends BaseStep
     {
         $phone = $session['phone_number'];
         $message = strtolower(trim($message));
+
+        $lang = $session['language'] ?? 'en';
+        $t = new Translator($lang);
 
         if ($message === "sender") {
 
@@ -37,29 +40,25 @@ class ChooseRoleStep extends BaseStep
 
             $this->whatsappService->sendMessage(
                 $phone,
-                "I can help you send packages fast right here on WhatsApp.\n\n" .
-                "Type one of the following to continue:\n" .
-                "/send — To send a package 📦\n" .
-                "/track — To track your order 📍\n" .
-                "/help — To get help ❓\n" .
-                "/history — To see your delivery history 🕘"
+                $t->get('sender_menu_intro')
             );
 
             return '';
         }
 
         if ($message === "rider") {
+
             $this->nextStep($phone, 'rider_name');
 
-            return "Great! Let's set up your rider profile.\n\nPlease enter your first name and last name as it appears on your ID (e.g. Chinedu Sani Adeyemi).";
+            return $t->get('rider_profile_setup');
         }
 
         $this->whatsappService->sendButtonMessage(
             $phone,
-            "I didn't understand that. Please choose one of the options below to get started.",
+            $t->get('choose_role_invalid'),
             [
-                "sender" => "📦 Send Package",
-                "rider"  => "🏍 Delivery Rider"
+                "sender" => $t->get('role_sender'),
+                "rider"  => $t->get('role_rider')
             ]
         );
 

@@ -3,12 +3,17 @@
 namespace App\Steps\Driver;
 
 use App\Steps\BaseStep;
+use App\Utils\Translator;
 
 class InReviewStep extends BaseStep
 {
-    protected string $validationError = "⏳ Your application is still under review.
+    protected string $validationError;
 
-Please wait for our team to complete the verification process. We'll notify you once approved!";
+    public function __construct()
+    {
+        // Default error message if translation fails
+        $this->validationError = "⏳ Your account is under review. Please wait while we complete verification.";
+    }
 
     /**
      * Handle messages from drivers whose accounts are pending verification
@@ -16,93 +21,54 @@ Please wait for our team to complete the verification process. We'll notify you 
     public function handle(array $session, $message): string
     {
         $phone = $session['phone_number'];
-        
+        $lang  = $session['language'] ?? 'en';
+        $t     = new Translator($lang);
+
         // Get driver details to check verification status
         $driver = $this->driverModel->findByPhone($phone);
-        
         if (!$driver) {
-            return "❌ Driver record not found. Please contact support.";
+            return $t->get('in_review_driver_not_found');
         }
 
-        // Check current verification status
         $status = $driver['verification_status'] ?? 'pending';
 
         switch ($status) {
             case 'approved':
-                // Driver was approved, move them to active state
                 $this->nextStep($phone, 'driver_active');
-                return "🎉 *Congratulations!* Your account has been approved! 
-
-You can now start accepting ride requests. 
-
-Type *'online'* to go online and start receiving requests.
-Type *'help'* to see available commands.";
+                return $t->get('in_review_approved'
+                );
 
             case 'rejected':
-                // Driver was rejected
-                return "❌ Unfortunately, your application was not approved.
-
-*Reason:* " . ($driver['rejection_reason'] ?? 'Please contact support for details.') . "
-
-You can reapply by typing *'reapply'* or contact support for assistance.";
+                return $t->get('in_review_rejected'
+                );
 
             case 'pending':
             default:
-                // Still pending - provide status update
-                $createdAt = strtotime($driver['created_at'] ?? 'now');
-                $hoursWaiting = floor((time() - $createdAt) / 3600);
-
-                return "⏳ *Application Status: Under Review*\n\nYour application submitted " . $this->formatTimeAgo($createdAt) . " is currently being reviewed by our team.\n\n📋 *What we're verifying:*
-✓ Driver's license
-✓ Vehicle registration
-✓ Identity documents
-✓ Background check
-
-⏱️ *Expected review time:* 24-48 hours
-
-We'll send you a WhatsApp notification once your account is approved!
-
-💡 *Need help?* Type *'support'* to contact our team.";
+                // Still pending - show in-review message
+                $this->validationError = $t->get('in_review_message');
+                return $this->validationError;
         }
     }
 
     /**
-     * Validate input - always return false to show the in-review message
-     * Unless they type specific commands
+     * Validate input - allow certain commands, otherwise show in-review message
      */
     public function validateInput(string $message): bool
     {
         $message = strtolower(trim($message));
-
-        // Allow specific commands
         $allowedCommands = ['status', 'help', 'support', 'reapply'];
-
-        if (in_array($message, $allowedCommands)) {
-            return true;
-        }
-
-        // For any other input, show the validation error (which is the in-review message)
-        return false;
+        return in_array($message, $allowedCommands);
     }
 
     /**
-     * Format time ago in human-readable format
+     * Optional helper: format time ago
      */
     private function formatTimeAgo(int $timestamp): string
     {
         $diff = time() - $timestamp;
-
-        if ($diff < 60) {
-            return 'just now';
-        } elseif ($diff < 3600) {
-            $mins = floor($diff / 60);
-            return $mins . ' minute' . ($mins > 1 ? 's' : '') . ' ago';
-        } elseif ($diff < 86400) {
-            $hours = floor($diff / 3600);
-            return $hours . ' hour' . ($hours > 1 ? 's' : '') . ' ago';
-        } else {
-            $days = floor($diff / 86400);
-            return $days . ' day' . ($days > 1 ? 's' : '') . ' ago';
-        }
+        if ($diff < 60) return 'just now';
+        if ($diff < 3600) return floor($diff / 60) . ' minute' . (floor($diff / 60) > 1 ? 's' : '') . ' ago';
+        if ($diff < 86400) return floor($diff / 3600) . ' hour' . (floor($diff / 3600) > 1 ? 's' : '') . ' ago';
+        return floor($diff / 86400) . ' day' . (floor($diff / 86400) > 1 ? 's' : '') . ' ago';
     }
 }

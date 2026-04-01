@@ -2,70 +2,46 @@
 
 namespace App\Steps\User;
 
+use App\Jobs\FindNearbyCouriersJob;
+
 use App\Steps\BaseStep;
 
 class FindCourierStep extends BaseStep
 {
-    protected string $validationError = "⚠️ Please wait while we find a courier.";
-
     public function handle(array $session, string $message): string
     {
         $phone = $session['phone_number'];
         $requestId = $session['delivery_request_id'] ?? null;
 
         if (!$requestId) {
-            return "Delivery request not found.";
+            return "⚠️ We couldn't find your delivery request.";
         }
 
-        // Fetch delivery request details
-        $request = $this->deliveryRequestModel->findById($requestId);
-        if (!$request) {
-            return "Could not find your delivery request.";
-        }
+        $biddingWindow = 110; // seconds
 
-        // Example: mark request as 'searching_driver'
+        $biddingExpires = date('Y-m-d H:i:s', time() + $biddingWindow);
+
+        // Mark request as searching
         $this->deliveryRequestModel->update($requestId, [
-            'status' => 'searching_driver'
+            'status' => 'searching_driver',
+            'bidding_expires_at' => $biddingExpires
         ]);
 
-        // Logic: fetch nearby riders (pseudo code)
-        $latitude = $request['pickup_lat'];
-        $longitude = $request['pickup_lng'];
-
-        //$nearbyRiders = $this->driverModel->findNearby($latitude, $longitude);
-        $nearbyRiders = [];
-
-        if (!empty($nearbyRiders)) {
-            // Assign first available rider (simplified)
-            $assignedRider = $nearbyRiders[0];
-            $this->deliveryRequestModel->update($requestId, [
-                'rider_id' => $assignedRider['id'],
-                'status' => 'assigned'
-            ]);
-
-            // Notify user
-            return "🎉 Good news! A courier has been found for your delivery.\n\n" .
-                   "Courier: {$assignedRider['name']}\n" .
-                   "Phone: {$assignedRider['phone']}\n\n" .
-                   "You can track your delivery in real-time.";
-        }
-
-        // If no riders found
-        $this->whatsappService->sendButtonMessage(
-            $phone,
-            "We are still searching for a courier near you. ⏳\n\nYou can try again or cancel the request.",
-            [
-                'refresh' => "🔄 Refresh",
-                'cancel'  => "❌ Cancel Delivery"
-            ]
+        // Dispatch background job
+        $job = new FindNearbyCouriersJob(
+            $requestId,
+            $this->driverModel,
+            $this->deliveryRequestModel,
+            $this->whatsappService
         );
 
-        return "We are searching for a courier nearby. You can press 'Refresh' to check again or 'Cancel' to stop the request.";
+        $job->handle(); // later this can go to queue
+
+        return "🚀 Your delivery request is now live!\n\nWe're searching for nearby couriers.\n\nYou'll be notified once a rider accepts.";
     }
 
     public function validateInput(string $message): bool
     {
-        $message = strtolower(trim($message));
-        return in_array($message, ['refresh','cancel']);
+        return true;
     }
 }

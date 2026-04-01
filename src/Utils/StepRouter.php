@@ -5,6 +5,7 @@ use App\Services\WhatsAppService;
 use App\Models\Session;
 use App\Models\DeliveryRequest;
 
+use App\Steps\LanguageStep;
 use App\Steps\StartStep;
 use App\Steps\ChooseRoleStep;
 
@@ -24,6 +25,8 @@ use App\Steps\User\PayerStep;
 use App\Steps\User\ConfirmationStep;
 use App\Steps\User\PriceOfferStep;
 use App\Steps\User\PaymentMethodStep;
+use App\Steps\User\PickupAddressStep;
+use App\Steps\User\DropoffAddressStep;
 
 use App\Steps\User\FindCourierStep;
 use App\Steps\Driver\LocationPreferenceStep;
@@ -34,6 +37,7 @@ use App\Steps\Driver\NINStep;
 use App\Steps\Driver\VehicleColorStep;
 use App\Steps\Driver\PhoneStep;
 use App\Steps\Driver\FullNameStep;
+use App\Steps\Driver\ConfirmLocationStep;
 
 use App\Models\LogisticsDriver;
 use App\Models\LogisticsUser;
@@ -48,6 +52,7 @@ class StepRouter
     private $steps = [
 
         // onboarding
+        'language' => LanguageStep::class,
         'start' => StartStep::class,
         'choose_role' => ChooseRoleStep::class,
         'sender_menu' => ShowMenuStep::class,
@@ -62,13 +67,16 @@ class StepRouter
         'vehicle_brand' => VehicleBrandStep::class,
         'nin' => NINStep::class,
         'rider_location_preference' => LocationPreferenceStep::class,
+        'confirm_location' => ConfirmLocationStep::class,
         'in_review' => InReviewStep::class,
 
         // delivery builder flow
         'pickup_location' => PickupLocationStep::class,
         'pickup_notes' => PickupNotesStep::class,
+        'pickup_address' => PickupAddressStep::class,
         'dropoff_location' => DropoffLocationStep::class,
         'dropoff_notes' => DropoffNotesStep::class,
+        'dropoff_address' => DropoffAddressStep::class,
         'item_name' => ItemNameStep::class,
         'item_description' => ItemDescriptionStep::class,
         'item_picture' => ItemPictureStep::class,

@@ -17,7 +17,18 @@ class VehicleTypeStep extends BaseStep
         $choice = strtolower(trim($message));
         $mapping = ['motorcycle' => 'motorcycle', 'keke' => 'keke', '🏍️' => 'motorcycle', '🛺' => 'keke'];
 
-        if (!isset($mapping[$choice])) return $this->validationError;
+        if (!isset($mapping[$choice])) {
+            $this->whatsappService->sendButtonMessage(
+                $phone,
+                "Select the delivery vehicle type:",
+                [
+                    'motorcycle' => "🏍️ Motorcycle",
+                    'keke' => "🛺 Keke"
+                ]
+            );
+
+            return '';
+        };
 
         $this->deliveryRequestModel->update($requestId, [
             'vehicle_type' => $mapping[$choice]
@@ -33,7 +44,7 @@ class VehicleTypeStep extends BaseStep
             "Great! The estimated delivery price is ₦{$estimatedPrice}.
             \n\nClick yes to proceed or simply type your preferred price. e.g. 2500",
             [
-                'yes' => "Yes, proceed"
+                $estimatedPrice => "Yes, proceed"
             ]
         );
         return '';
@@ -41,7 +52,7 @@ class VehicleTypeStep extends BaseStep
 
     public function validateInput(string $message): bool
     {
-        $valid = ['motorcycle','keke','🏍️','🛺'];
-        return in_array(strtolower(trim($message)), $valid);
+
+        return true;
     }
 }

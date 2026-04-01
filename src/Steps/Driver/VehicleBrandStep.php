@@ -3,18 +3,18 @@
 namespace App\Steps\Driver;
 
 use App\Steps\BaseStep;
+use App\Utils\Translator;
 
 class VehicleBrandStep extends BaseStep
 {
-    // ✅ FIXED - Added string type to match BaseStep
-    protected string $validationError = "Please enter your vehicle brand and model (e.g., TVS HLX 125 or Honda Activa).";
+    protected string $validationError;
 
-    /**
-     * Handle vehicle brand + model input
-     */
     public function handle(array $session, $message): string
     {
         $phone = $session['phone_number'];
+        $lang  = $session['language'] ?? 'en';
+        $t     = new Translator($lang);
+
         $brandModel = strtoupper(trim($message));
 
         // Save vehicle brand/model
@@ -25,18 +25,27 @@ class VehicleBrandStep extends BaseStep
         // Move to next step
         $this->nextStep($phone, 'rider_ready');
 
-        return "Perfect! ✅\n\nYour vehicle: *{$brandModel}* has been saved.\n\n⏳ We're reviewing your details now…This usually takes a few minutes";
+        // Send multilingual info message
+        $this->whatsappService->sendMessage(
+            $phone,
+            $t->get('in_review_message')
+        );
+
+        return '';
     }
 
-    /**
-     * Validate brand-model format
-     */
     public function validateInput(string $message): bool
     {
-        error_log("Validating vehicle brand/model: " . $message);
         $message = trim($message);
 
-        // Allow letters, numbers, spaces, dash and slash
-        return preg_match('/^[A-Za-z0-9\s\-\/]{3,50}$/', $message) === 1;
+        $valid = preg_match('/^[A-Za-z0-9\s\-\/]{3,50}$/', $message) === 1;
+
+        if (!$valid) {
+            $lang = $this->session['language'] ?? 'en';
+            $t = new Translator($lang);
+            $this->validationError = $t->get('vehicle_brand_invalid');
+        }
+
+        return $valid;
     }
 }

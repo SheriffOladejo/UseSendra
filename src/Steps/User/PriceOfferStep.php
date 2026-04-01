@@ -18,6 +18,7 @@ class PriceOfferStep extends BaseStep
 
         // User accepts the estimated price
         if (strtolower($choice) === 'yes') {
+
             $this->nextStep($phone, 'payer');
 
             $this->whatsappService->sendButtonMessage(
@@ -43,7 +44,7 @@ class PriceOfferStep extends BaseStep
 
             $this->whatsappService->sendButtonMessage(
                 $phone,
-                "Got it! You suggested ₦{$numericPrice} for delivery.\n\nWho will pay for the delivery?",
+                "Got it! Your price offer to riders will be ₦{$numericPrice}.\n\nWho will pay for the delivery?",
                 [
                     'sender' => "Sender",
                     'receiver' => "Receiver"

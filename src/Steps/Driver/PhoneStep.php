@@ -3,6 +3,7 @@
 namespace App\Steps\Driver;
 
 use App\Steps\BaseStep;
+use App\Utils\Translator;
 
 class PhoneStep extends BaseStep
 {
@@ -10,19 +11,26 @@ class PhoneStep extends BaseStep
     {
         $phone = preg_replace('/\D/', '', $message);
 
+        $lang = $session['language'] ?? 'en';
+        error_log("Validating phone: '$phone' for language: $lang");
+        $t = new Translator($lang);
+
         $this->driverModel->update($session['phone_number'], [
             'preferred_phone_number' => $phone
         ]);
 
-        $this->nextStep($session['phone_number'], 'rider_location_preference');
+        $this->nextStep($session['phone_number'], 'vehicle_type');
 
-        return "Excellent🎯! Where do you usually operate from?  (This will help us route orders to you easily). 
-        \n\nUse Whatsapp's location📍 feature to select the location on the map
-        \n1. Tap the '+' icon
-        \n2. Select 'Location'
-        \n3. Choose 'Send your current location' or pick a spot on the map
-        \n\nNo worries, you can always change it anytime";
+        $this->whatsappService->sendButtonMessage(
+            $phone,
+            $t->get('vehicle_prompt'),
+            [
+                "motorcycle" => $t->get('vehicle_motorcycle'),
+                "keke"       => $t->get('vehicle_keke')
+            ]
+        );
 
+        return $t->get('');
     }
 
     public function validateInput(string $phone): bool
@@ -31,7 +39,10 @@ class PhoneStep extends BaseStep
             return true;
         }
 
-        $this->validationError = "Please enter a valid phone number.";
+        $lang = $this->session['language'] ?? 'en';
+        $t = new Translator($lang);
+
+        $this->validationError = $t->get('invalid_phone');
         return false;
     }
 }
