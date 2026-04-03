@@ -34,14 +34,17 @@
 
 ---
 
-## Key Credentials (test/dev)
+## Key Credentials
 
-| Key | Value |
+> ⚠️ Never commit real credentials here. Store in `.env` / AWS SSM / server environment only.
+
+| Key | Where to find it |
 |---|---|
-| PHONE_NUMBER_ID | `` |
-| VERIFY_TOKEN | `` |
-| INTERNAL_API_SECRET | `` (dev) |
-| WhatsApp bot number | `` |
+| `PHONE_NUMBER_ID` | Meta Developer Console → WhatsApp → Phone Numbers |
+| `VERIFY_TOKEN` | Set in Meta webhook config + `webhook.php` |
+| `INTERNAL_API_SECRET` | `.env` on server, shared between `webhook.php` and `aptos-service` |
+| `ACCESS_TOKEN` | Meta Developer Console → WhatsApp → API Setup |
+| WhatsApp bot number | `+2348144111831` |
 
 ---
 
@@ -303,8 +306,46 @@ tail -f /var/www/html/php-debug.log
 
 ---
 
+## Third-Party Integrations (Planned)
+
+### Centiv — Buy/Sell
+- Status: **TODO**
+- Purpose: Fiat on/off ramp — buy and sell USDT/USDC via the bot
+
+### SmoothSend — Gasless Transactions
+- Status: **Under review — security concern (see below)**
+- Website: https://www.smoothsend.xyz
+- npm: `@smoothsend/sdk`
+- Purpose: Sponsor gas fees so users never need APT to send USDC/USDT
+- How it works: Aptos sponsored transactions — user signs a message, SmoothSend relayer pays gas
+- Chains supported: Aptos (mainnet + testnet), Arbitrum, Base, Avalanche
+- Pilot program: Free gas credits available at https://pilot.smoothsend.xyz
+- API key dashboard: https://dashboard.smoothsend.xyz
+- Docs: https://docs.smoothsend.xyz
+
+**⚠️ Security Hold — Axios Supply Chain Attack (March 31, 2026)**
+
+The `@smoothsend/sdk` package lists `axios` as its only production npm dependency. On March 31, 2026, axios was compromised in a North Korean (Sapphire Sleet / UNC1069) supply chain attack:
+
+- Malicious versions: `axios@1.14.1` and `axios@0.30.4`
+- Attack vector: Compromised maintainer account published versions with a hidden dependency (`plain-crypto-js@4.2.1`) that ran a postinstall RAT dropper targeting macOS, Windows, and Linux
+- The RAT stole credentials, API keys, and cloud tokens, then contacted a C2 server (`sfrclak.com:8000`)
+- Malicious versions were live for ~3 hours (00:21–03:30 UTC) before removal
+- Safe versions: `axios@1.14.0` (1.x) or `axios@0.30.3` (0.x)
+
+**Before integrating SmoothSend:**
+1. Check which axios version `@smoothsend/sdk` pins in its `package.json`
+2. Confirm it is NOT `1.14.1` or `0.30.4`
+3. Run `npm audit` and verify no `plain-crypto-js` in the dependency tree
+4. Check if SmoothSend has published a statement or updated their SDK since March 31
+5. Consider waiting for a new SmoothSend release that explicitly pins a safe axios version
+
+---
+
 ## Pending / TODO
 
+- [ ] Integrate Centiv API for buy/sell (fiat on/off ramp)
+- [ ] Integrate SmoothSend gasless transactions — **blocked pending axios security review above**
 - [ ] BVN/NIN KYC integration (Youverify / Smile Identity / Prembly)
 - [ ] Daily transaction limits per KYC tier in MessageController
 - [ ] Sanctions screening API (ComplyAdvantage or World-Check)
