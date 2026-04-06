@@ -1,6 +1,7 @@
 <?php
 namespace App\Utils;
 
+use App\Models\DeliveryOffer;
 use App\Services\WhatsAppService;
 use App\Models\Session;
 use App\Models\DeliveryRequest;
@@ -27,6 +28,7 @@ use App\Steps\User\PriceOfferStep;
 use App\Steps\User\PaymentMethodStep;
 use App\Steps\User\PickupAddressStep;
 use App\Steps\User\DropoffAddressStep;
+use App\Steps\User\ChooseOfferStep;
 
 use App\Steps\User\FindCourierStep;
 use App\Steps\Driver\LocationPreferenceStep;
@@ -38,14 +40,16 @@ use App\Steps\Driver\VehicleColorStep;
 use App\Steps\Driver\PhoneStep;
 use App\Steps\Driver\FullNameStep;
 use App\Steps\Driver\ConfirmLocationStep;
+use App\Steps\Driver\CounterOfferStep;
 
 use App\Models\LogisticsDriver;
 use App\Models\LogisticsUser;
-
+use App\Steps\Driver\DriverRejectedStep;
 use App\Steps\Driver\VehicleBrandStep;
 use App\Steps\Driver\VehiclePictureStep;
 use App\Steps\Driver\LicensePictureStep;
 use App\Steps\Driver\InReviewStep;
+use App\Steps\Driver\RiderApprovedStep;
 
 class StepRouter
 {
@@ -69,6 +73,10 @@ class StepRouter
         'rider_location_preference' => LocationPreferenceStep::class,
         'confirm_location' => ConfirmLocationStep::class,
         'in_review' => InReviewStep::class,
+        'rider_approved' => RiderApprovedStep::class,
+        'driver_rejected' => DriverRejectedStep::class,
+        'driver_enter_counter' => CounterOfferStep::class,
+        'customer_choose_offer' => ChooseOfferStep::class,
 
         // delivery builder flow
         'pickup_location' => PickupLocationStep::class,
@@ -98,14 +106,16 @@ class StepRouter
     private $driverModel;
     private $userModel;
     private $deliveryRequestModel;
+    private $deliveryOfferModel;
 
-    public function __construct(Session $sessionModel, WhatsAppService $whatsappService, LogisticsDriver $driverModel, LogisticsUser $userModel, DeliveryRequest $deliveryRequestModel)
+    public function __construct(Session $sessionModel, WhatsAppService $whatsappService, LogisticsDriver $driverModel, LogisticsUser $userModel, DeliveryRequest $deliveryRequestModel, DeliveryOffer $deliveryOfferModel)
     {
         $this->sessionModel = $sessionModel;
         $this->whatsappService = $whatsappService;
         $this->driverModel = $driverModel;
         $this->userModel = $userModel;
         $this->deliveryRequestModel = $deliveryRequestModel;
+        $this->deliveryOfferModel = $deliveryOfferModel;
     }
 
     public function getStepHandler(string $step)
@@ -117,7 +127,8 @@ class StepRouter
             $this->whatsappService,
             $this->driverModel,
             $this->userModel,
-            $this->deliveryRequestModel
+            $this->deliveryRequestModel,
+            $this->deliveryOfferModel
         );
     }
 }

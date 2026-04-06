@@ -52,7 +52,7 @@ router.post('/create', async (req: Request, res: Response) => {
       encrypted_private_key: encryptedKey,
       // Return plain key ONCE so PHP can show it to user as backup
       // PHP must NOT store this — display and discard
-      private_key_for_display: privateKeyHex,
+      private_key_for_display: 'privateKeyHex',
     });
   } catch (e: any) {
     console.error('[accounts/create] Error:', e.message);

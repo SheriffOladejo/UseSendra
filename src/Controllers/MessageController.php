@@ -682,8 +682,7 @@ class MessageController
             $from,
             "*💰 Your Wallet Balance*\n\n" .
                 "💵 USDC: *\${$balances['USDC']}*\n" .
-                "💵 USDT: *\${$balances['USDT']}*\n" .
-                "⚡ APT:  *{$balances['APT']}*\n\n" .
+                "💵 USDT: *\${$balances['USDT']}*\n\n" .
                 "_Updated: " . date('M d, Y g:i A') . "_"
         );
 

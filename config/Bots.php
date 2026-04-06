@@ -31,7 +31,7 @@ return [
             ],
             'replica' => [
                 'host' => 'localhost',
-                'name' => 'sendra_logistics_db_replica',
+                'name' => 'sendra_logistics_test_db',
                 'user' => 'developer',
                 'pass' => 'Stipendly@2026'
             ]

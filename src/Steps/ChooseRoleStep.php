@@ -2,6 +2,7 @@
 
 namespace App\Steps;
 
+use App\Models\DeliveryOffer;
 use App\Models\Session;
 use App\Models\LogisticsDriver;
 use App\Models\LogisticsUser;
@@ -16,9 +17,10 @@ class ChooseRoleStep extends BaseStep
         WhatsAppService $whatsappService,
         LogisticsDriver $driverModel,
         LogisticsUser $userModel,
-        DeliveryRequest $deliveryRequestModel
+        DeliveryRequest $deliveryRequestModel,
+        DeliveryOffer $deliveryOfferModel
     ) {
-        parent::__construct($sessionModel, $whatsappService, $driverModel, $userModel, $deliveryRequestModel);
+        parent::__construct($sessionModel, $whatsappService, $driverModel, $userModel, $deliveryRequestModel, $deliveryOfferModel);
     }
 
     public function handle(array $session, string $message): string
@@ -36,7 +38,7 @@ class ChooseRoleStep extends BaseStep
                 $this->getUsername()
             );
 
-            $this->nextStep($phone, 'sender_menu');
+            $this->nextStep($phone, 'pickup_address');
 
             $this->whatsappService->sendMessage(
                 $phone,

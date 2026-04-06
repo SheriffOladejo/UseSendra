@@ -6,12 +6,17 @@ const express_1 = require("express");
 const ts_sdk_1 = require("@aptos-labs/ts-sdk");
 const aptosClient_1 = require("../services/aptosClient");
 const keyManager_1 = require("../services/keyManager");
+const sdk_1 = require("@smoothsend/sdk");
 const router = (0, express_1.Router)();
 exports.transactionRoutes = router;
 const ASSET_METADATA = {
     USDC: '0x69091fbab5f7d635ee7ac5098cf0c1efbe31d68fec0f2cd565e8d168daf52832',
     USDT: '0x5724aca06f8bd505e9eaf2337d16d6fc310c96ecfd331269bf2f76840d3f355a',
 };
+const smoothClient = new sdk_1.ScriptComposerClient({
+    apiKey: process.env.SMOOTHSEND_API_KEY,
+    network: 'testnet',
+});
 // ─── Middleware: verify internal secret ───────────────────────────────────────
 router.use((req, res, next) => {
     const secret = req.headers['x-internal-secret'];
@@ -34,7 +39,6 @@ router.use((req, res, next) => {
  */
 router.post('/execute', async (req, res) => {
     const { sender_address, encrypted_private_key, recipient, amount, currency } = req.body;
-    // ── Validate inputs ──
     if (!sender_address || !encrypted_private_key || !recipient || !amount || !currency) {
         res.status(400).json({
             success: false,
@@ -57,11 +61,9 @@ router.post('/execute', async (req, res) => {
         return;
     }
     try {
-        // ── Decrypt private key (lives in memory only for duration of request) ──
         const privateKeyHex = (0, keyManager_1.decryptKey)(encrypted_private_key);
         const privateKey = new ts_sdk_1.Ed25519PrivateKey(privateKeyHex);
         const senderAccount = ts_sdk_1.Account.fromPrivateKey({ privateKey });
-        // Confirm the derived address matches what was passed in (safety check)
         if (senderAccount.accountAddress.toString().toLowerCase() !== sender_address.toLowerCase()) {
             res.status(400).json({
                 success: false,
@@ -69,22 +71,35 @@ router.post('/execute', async (req, res) => {
             });
             return;
         }
-        // ── Build transaction ──
-        // Amount in smallest unit — USDC/USDT have 6 decimal places
         const rawAmount = Math.round(parsedAmount * 1000000);
-        console.log(`[transactions/execute] ${sender_address} → ${recipient}: ${parsedAmount} ${upperCurrency} (raw: ${rawAmount})`);
-        const tx = await aptosClient_1.aptos.transaction.build.simple({
+        console.log(`[transactions/execute] ${JSON.stringify({
             sender: sender_address,
-            data: {
-                function: '0x1::primary_fungible_store::transfer',
-                typeArguments: ['0x1::fungible_asset::Metadata'],
-                functionArguments: [metadataAddress, recipient, rawAmount],
-            },
+            recipient: recipient,
+            amount: String(rawAmount),
+            assetType: metadataAddress,
+            decimals: 6,
+            symbol: upperCurrency,
+        })}`);
+        // ── CHANGED: Build via SmoothSend instead of aptos.transaction.build.simple ──
+        const { transactionBytes, fee, totalAmount } = await smoothClient.buildTransfer({
+            sender: sender_address,
+            recipient: recipient,
+            amount: String(rawAmount),
+            assetType: metadataAddress,
+            decimals: 6,
+            symbol: upperCurrency
         });
-        // ── Simulate first to catch errors before paying gas ──
+        console.log('[smoothsend] build response:', JSON.stringify({
+            feeBreakdown: fee,
+            txBytesLength: transactionBytes.length,
+        }));
+        // ── Deserialize the transaction bytes SmoothSend returned ──
+        const txBytes = new Uint8Array(transactionBytes);
+        const transaction = ts_sdk_1.SimpleTransaction.deserialize(new ts_sdk_1.Deserializer(txBytes));
+        // ── Simulate against the SmoothSend-built tx ──
         const simulation = await aptosClient_1.aptos.transaction.simulate.simple({
             signerPublicKey: senderAccount.publicKey,
-            transaction: tx,
+            transaction: transaction,
         });
         const simResult = simulation[0];
         if (!simResult.success) {
@@ -95,21 +110,18 @@ router.post('/execute', async (req, res) => {
             });
             return;
         }
-        // ── Sign and submit ──
-        const submitted = await aptosClient_1.aptos.signAndSubmitTransaction({
-            transaction: tx,
-            signer: senderAccount,
+        // ── CHANGED: Sign only (not sign+submit) ──
+        const signedTx = aptosClient_1.aptos.transaction.sign({ signer: senderAccount, transaction });
+        // ── CHANGED: Submit via SmoothSend relayer ──
+        const result = await smoothClient.submitSignedTransaction({
+            transactionBytes: Array.from(txBytes),
+            authenticatorBytes: Array.from(signedTx.bcsToBytes()),
         });
-        // ── Wait for confirmation ──
-        const confirmed = await aptosClient_1.aptos.waitForTransaction({
-            transactionHash: submitted.hash,
-        });
-        console.log(`[transactions/execute] Confirmed tx: ${submitted.hash}`);
+        console.log(`[transactions/execute] Confirmed tx: ${result.txHash}`);
         res.json({
             success: true,
-            tx_hash: submitted.hash,
-            explorer_url: `https://explorer.aptoslabs.com/txn/${submitted.hash}?network=testnet`,
-            gas_used: confirmed.gas_used,
+            tx_hash: result.txHash,
+            explorer_url: `https://explorer.aptoslabs.com/txn/${result.txHash}?network=testnet`,
         });
     }
     catch (e) {

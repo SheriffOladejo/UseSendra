@@ -37,11 +37,12 @@ class PickupLocationStep extends BaseStep
         ]);
 
         // Move to next step
-        $this->nextStep($phone, 'pickup_notes');
+        $this->nextStep($phone, 'dropoff_address');
 
         $this->whatsappService->sendMessage(
             $phone,
-            "Got it! Please give more context on the details of the pickup location.\n\nFor example, you can mention landmarks, building names, or any specific instructions for the driver."
+            "Thanks! Now we need to know where it is going?".
+            "\nEnter the delivery address (e.g. *765 Fola Osibo, Lekki Phase 1, Lagos*)"
         );
 
         return '';

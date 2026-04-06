@@ -11,27 +11,24 @@ return [
     'button_confirm_location' => "✅ Confirm Location",
 
     // User greetings & onboarding
-    'start_greeting' => "Hello 🙋🏽‍♀️ {name}! Welcome to *Sendra Courier*.\n\nLet's get started by selecting your preferred language.",
+    'start_greeting' => "Hello 🙋🏽‍♀️ {name}! Welcome to *Sendra Logistics*.\n\nLet's get started by selecting your preferred language.",
     'more_languages' => "More languages:",
     'language_selected' => "✅ You have selected {language} as your language.",
     'language_selection_error' => "Please select a language by tapping a button.",
-    'welcome_message' => "Hello 🙋🏽‍♀️ {name}! Welcome to *Sendra Courier* \n\nLet’s get you set up real quick.\n\nAre you here to send packages or deliver them?",
+    'welcome_message' => "Hello 🙋🏽‍♀️ {name}! Welcome to *Sendra Logistics* \n\nLet’s get you set up real quick.\n\nAre you here to send packages or deliver them?",
     'help_menu' => "I can help you send packages fast right here on WhatsApp.\n\nType one of the following to continue:\n/send — To send a package 📦\n/track — To track your order 📍\n/help — To get help ❓\n/history — To see your delivery history 🕘",
     'unrecognized_option' => "I didn't understand that. Please choose one of the options below to get started.",
     'rider_name_prompt' => "Great! Let's set up your rider profile.\n\nPlease enter your first name and last name as it appears on your ID (e.g. Chinedu Sani Adeyemi).",
 
     // Choose Role Step
-    'choose_role_prompt' => "Are you here to send packages or deliver them?",
+    'choose_role_prompt' => "Hello 🙋🏽‍♀️ {name}! Welcome to *Sendra Logistics*\n\nLet's get you started real quick\n\nAre you here to send packages or deliver them?",
     'choose_role_invalid' => "I didn't understand that. Please choose one of the options below to get started.",
     'role_sender' => "📦 Send Package",
     'role_rider' => "🏍 Delivery Rider",
     'sender_menu_intro' =>
-    "I can help you send packages fast right here on WhatsApp.\n\n" .
-    "Type one of the following to continue:\n" .
-    "/send — To send a package 📦\n" .
-    "/track — To track your order 📍\n" .
-    "/help — To get help ❓\n" .
-    "/history — To see your delivery history 🕘",
+    "Nice, let's get this moving. 📦".
+    "\nFirst, where are we picking up from?".
+    "\nEnter the pickup address (e.g. *123 Allen Avenue, Ikeja, Lagos*):",
 
     'rider_profile_setup' => "Great! Let's set up your rider profile.\n\nPlease enter your *full name* exactly as it appears on your ID (e.g. Chinedu Sani Adeyemi).",
     // Full Name Step

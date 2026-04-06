@@ -3,6 +3,7 @@
 namespace App\Steps;
 
 use App\Steps\BaseStep;
+use App\Utils\Translator;
 
 class StartStep extends BaseStep
 {
@@ -19,46 +20,27 @@ class StartStep extends BaseStep
         $name = $this->getUsername() ?? 'there';
 
         // Move user to language selection step
-        $this->nextStep($phone, 'language');
-
-        // Split buttons into batches of 3 for WhatsApp
-        $keys = array_keys($this->languages);
-        $firstBatch = array_slice($keys, 0, 3);
-        $secondBatch = array_slice($keys, 3);
-
-        $buttons1 = [];
-        foreach ($firstBatch as $key) {
-            $buttons1[$key] = $this->languages[$key];
-        }
-
+        $this->nextStep($phone, 'choose_role');
+        $translator = new Translator('en'); // Default to English for the greeting
         $this->whatsappService->sendButtonMessage(
             $phone,
-            "Hello 🙋🏽‍♀️ $name! Welcome to *Sendra Logistics* 🌟\nPlease select your preferred language:",
-            $buttons1
+            $translator->get('choose_role_prompt', ['name' => $name]),
+            [
+                "sender" => $translator->get('role_sender'),
+                "rider"  => $translator->get('role_rider')
+            ]
         );
-
-        if (!empty($secondBatch)) {
-            $buttons2 = [];
-            foreach ($secondBatch as $key) {
-                $buttons2[$key] = $this->languages[$key];
-            }
-
-            $this->whatsappService->sendButtonMessage(
-                $phone,
-                "More languages:",
-                $buttons2
-            );
-        }
 
         return '';
     }
 
     public function validateInput($message): bool
     {
+        return true;
         // Accept any greeting or non-empty text
-        $greetings = ['hi', 'hello', 'hey', 'hola', 'howdy'];
-        $text = strtolower(trim($message));
+        //$greetings = ['hi', 'hello', 'hey', 'hola', 'howdy'];
+        //$text = strtolower(trim($message));
 
-        return !empty($text) && (in_array($text, $greetings) || strlen($text) > 1);
+        //return !empty($text) && (in_array($text, $greetings) || strlen($text) > 1);
     }
 }

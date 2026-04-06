@@ -63,6 +63,9 @@ class LogisticsDriver
         )
     ) AS distance
     FROM drivers
+    WHERE verification_status IN ('approved') AND status IN ('active')
+    AND preferred_latitude IS NOT NULL
+    AND preferred_longitude IS NOT NULL
     HAVING distance < :radius
     ORDER BY distance
     LIMIT 10

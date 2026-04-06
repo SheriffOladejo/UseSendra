@@ -9,7 +9,7 @@ class PhoneStep extends BaseStep
 {
     public function handle(array $session, string $message): string
     {
-        $phone = preg_replace('/\D/', '', $message);
+        $phone = $session['phone_number'];
 
         $lang = $session['language'] ?? 'en';
         error_log("Validating phone: '$phone' for language: $lang");

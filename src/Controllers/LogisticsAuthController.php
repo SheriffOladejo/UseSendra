@@ -38,7 +38,7 @@ class LogisticsAuthController
 
             $this->whatsappService->sendMessage(
                 $phoneNumber,
-                "Welcome to *Sendra Courier* 🚚\n\nYour account has been created successfully."
+                "Welcome to *Sendra Logistics* 🚚\n\nYour account has been created successfully."
             );
 
             return [

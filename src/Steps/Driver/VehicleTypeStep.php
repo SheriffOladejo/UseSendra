@@ -53,6 +53,11 @@ class VehicleTypeStep extends BaseStep
                 'motorcycle' => $t->get('vehicle_motorcycle'),
                 'keke'       => $t->get('vehicle_keke')
             ];
+            $this->whatsappService->sendButtonMessage(
+                $this->session['phone_number'],
+                $t->get('invalid_vehicle_type'),
+                $validTypes
+            );
             $this->validationError = $t->get('invalid_vehicle_type');
             // optionally resend buttons here too
             return false;

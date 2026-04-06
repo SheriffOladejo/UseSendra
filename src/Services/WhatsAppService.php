@@ -224,6 +224,47 @@ class WhatsAppService
     }
 
     /**
+ * Send interactive list message
+ */
+    public function sendListMessage($to, $bodyText, $buttonLabel, $rows)
+    {
+        $url = "https://graph.facebook.com/v20.0/{$this->phoneNumberId}/messages";
+
+        // WhatsApp list supports max 10 rows per section
+        $rowArray = [];
+        foreach ($rows as $id => $title) {
+            $rowArray[] = [
+                "id"    => $id,
+                "title" => substr($title, 0, 24) // max 24 chars for list row title
+            ];
+        }
+
+        $payload = json_encode([
+            "messaging_product" => "whatsapp",
+            "recipient_type"    => "individual",
+            "to"                => $to,
+            "type"              => "interactive",
+            "interactive"       => [
+                "type" => "list",
+                "body" => [
+                    "text" => $bodyText
+                ],
+                "action" => [
+                    "button"   => $buttonLabel, // the CTA button that opens the list
+                    "sections" => [
+                        [
+                            "title" => "Available Offers",
+                            "rows"  => $rowArray
+                        ]
+                    ]
+                ]
+            ]
+        ]);
+
+        return $this->makeRequest($url, $payload);
+    }
+
+    /**
      * Send Call-to-Action (CTA) URL button message
      * This hides the URL behind a button - user only sees the button text
      */

@@ -1,6 +1,7 @@
 <?php
 namespace App\Steps;
 
+use App\Models\DeliveryOffer;
 use App\Models\Session;
 use App\Models\LogisticsDriver;
 use App\Models\LogisticsUser;
@@ -16,6 +17,7 @@ abstract class BaseStep implements StepInterface
     protected $driverModel;
     protected $userModel;
     protected $deliveryRequestModel;
+    protected $deliveryOfferModel;
     protected string $validationError;
     protected string $username = "";
 
@@ -25,6 +27,7 @@ abstract class BaseStep implements StepInterface
         LogisticsDriver $driverModel,
         LogisticsUser $userModel,
         DeliveryRequest $deliveryRequestModel,
+        DeliveryOffer $deliveryOfferModel,
         array $session = []
     ) {
         $this->sessionModel = $sessionModel;
@@ -32,6 +35,7 @@ abstract class BaseStep implements StepInterface
         $this->driverModel = $driverModel;
         $this->userModel = $userModel;
         $this->deliveryRequestModel = $deliveryRequestModel;
+        $this->deliveryOfferModel = $deliveryOfferModel;
 
     }
 
@@ -67,7 +71,7 @@ abstract class BaseStep implements StepInterface
         $lang = $session['language'] ?? 'en';
 
         $translator = new Translator($lang);
-        $this->validationError = $translator->get('invalid_input');
+        //$this->validationError = $translator->get('invalid_input');
     }
 
 }

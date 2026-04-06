@@ -20,18 +20,11 @@ class ConfirmLocationStep extends BaseStep
         // If user confirms
         if ($message === 'confirm_location') {
 
-            $this->nextStep($phone, 'vehicle_type');
+            $this->nextStep($phone, 'rider_approved');
 
-            $this->whatsappService->sendButtonMessage(
-                $phone,
-                $t->get('vehicle_prompt'),
-                [
-                    "motorcycle" => $t->get('vehicle_motorcycle'),
-                    "keke"       => $t->get('vehicle_keke')
-                ]
-            );
-
-            return '';
+            return   "✅ Location updated successfully!\n\n".
+                "You are now ready to receive delivery requests near you.\n\n".
+                "Say *hi* anytime to learn how the platform works.";
         }
 
         // If user sends a new location

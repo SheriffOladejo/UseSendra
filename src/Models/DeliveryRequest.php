@@ -129,6 +129,20 @@ class DeliveryRequest
         }
     }
 
+    public function findByAcceptanceReference($reference)
+    {
+        $stmt = $this->db->prepare("
+            SELECT *
+            FROM delivery_requests
+            WHERE acceptance_payment_reference = ?
+            LIMIT 1
+        ");
+
+        $stmt->execute([$reference]);
+
+        return $stmt->fetch(PDO::FETCH_ASSOC);
+    }
+
     public function generateQRCode(string $data, int $size = 200): string {
         $encodedData = urlencode($data);
         return "https://chart.googleapis.com/chart?cht=qr&chs={$size}x{$size}&chl={$encodedData}&chld=L|1";

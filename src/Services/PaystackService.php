@@ -15,7 +15,7 @@ class PaystackService
         $this->secretKey = $config['secret_key'];
         $this->baseUrl = $config['base_url'];
 
-        error_log("PaystackService initialized with base URL: {$this->baseUrl}. Secret Key: {$this->secretKey}");
+        //error_log("PaystackService initialized with base URL: {$this->baseUrl}. Secret Key: {$this->secretKey}");
     }
 
     private function request(string $endpoint, array $payload = [])

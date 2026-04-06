@@ -12,19 +12,19 @@ return [
     // User greetings & onboarding
     'select_language_prompt' => "Kaabo si Sendra Logistics! 🌟\nJowo yan ede ti o fẹ:",
     'more_languages' => "Awọn ede diẹ sii:",
-    'language_selected' => "✅ O ti yan {language} gẹgẹbi ede rẹ.",
+    'language_selected' => "✅ O ti yan {language} gẹgẹ bi ede rẹ.",
     'language_selection_error' => "Jowo yan ede kan nipa titẹ bọtini kan.",
-    'start_greeting' => "Bawo 🙋🏽‍♀️ {name}! Kaabo si *Sendra Courier*.\n\nJẹ ká bẹ̀rẹ̀ nipa yiyan èdè tí o fẹ́ lo.",
-    'welcome_message' => "Pẹlẹ o 🙋🏽‍♀️ {name}! Kaabo si *Sendra Courier* \n\nẸ jẹ́ kí a ṣeto ọ ni kiakia.\n\nṢe o wa nibi lati firanṣẹ awọn package tabi lati gbe wọn?",
+    'start_greeting' => "Bawo 🙋🏽‍♀️ {name}! Kaabo si *Sendra Logistics*.\n\nJẹ ká bẹ̀rẹ̀ nipa yiyan èdè tí o fẹ́ lo.",
+    'welcome_message' => "Pẹlẹ o 🙋🏽‍♀️ {name}! Kaabo si *Sendra Logistics* \n\nẸ jẹ́ kí a ṣeto ọ ni kiakia.\n\nṢe o wa nibi lati firanṣẹ awọn package tabi lati gbe wọn?",
     'help_menu' => "Mo le ran ọ lọwọ lati firanṣẹ package ni kiakia nibi lori WhatsApp.\n\nTẹ ọkan ninu awọn wọnyi lati tẹsiwaju:\n/send — Lati firanṣẹ package 📦\n/track — Lati tọpa aṣẹ rẹ 📍\n/help — Lati gba iranlọwọ ❓\n/history — Lati wo itan gbigbe rẹ 🕘",
     'unrecognized_option' => "Mi ò loye yẹn. Jowo yan ọkan ninu awọn aṣayan ni isalẹ lati bẹrẹ.",
     'rider_name_prompt' => "O tayọ! Jẹ ki a ṣeto profaili awakọ rẹ.\n\nJọwọ tẹ orukọ akọkọ ati orukọ idile rẹ gẹgẹ bi o ti wa lori ID rẹ (e.g. Chinedu Sani Adeyemi).",
 
     // Choose Role Step
-    'choose_role_prompt' => "Ṣe o wa nibi lati firanṣẹ awọn package tabi lati gbe wọn?",
+    'choose_role_prompt' => "Ṣe o wa sibi lati fi packagi ranṣẹ awọn tabi lati gbe wọn?",
     'choose_role_invalid' => "Mi ò lóye ìdáhùn yẹn. Jọ̀wọ́ yan ọkan ninu awọn aṣayan ni isalẹ lati bẹrẹ.",
     'role_sender' => "📦 Fi package ranṣẹ",
-    'role_rider' => "🏍 Olùgbanisẹ́ Rider",
+    'role_rider' => "🏍 Awakọ ifijiṣẹ",
     'sender_menu_intro' =>
     "Mo le ran ọ lọwọ lati firanṣẹ package ni kiakia nibi lori WhatsApp.\n\n" .
     "Tẹ ọkan ninu awọn wọnyi lati tẹsiwaju:\n" .
