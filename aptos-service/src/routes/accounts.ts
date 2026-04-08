@@ -1,8 +1,8 @@
 // src/routes/accounts.ts
 import { Router, Request, Response } from 'express';
 import { Account } from '@aptos-labs/ts-sdk';
-import { aptos } from '../services/aptosClient';
-import { encryptKey, decryptKey } from '../services/keyManager';
+import { aptos } from '../services/aptosClient.js';
+import { encryptKey, decryptKey } from '../services/keyManager.js';
 
 const router = Router();
 

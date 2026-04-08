@@ -6,8 +6,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 // src/index.ts
 require("dotenv/config");
 const express_1 = __importDefault(require("express"));
-const accounts_1 = require("./routes/accounts");
-const transactions_1 = require("./routes/transactions");
+const accounts_js_1 = require("./routes/accounts.js");
+const transactions_js_1 = require("./routes/transactions.js");
 const app = (0, express_1.default)();
 app.use(express_1.default.json());
 // ─── Health check (no auth required) ─────────────────────────────────────────
@@ -20,8 +20,8 @@ app.get('/health', (_req, res) => {
     });
 });
 // ─── Routes ───────────────────────────────────────────────────────────────────
-app.use('/accounts', accounts_1.accountRoutes);
-app.use('/transactions', transactions_1.transactionRoutes);
+app.use('/accounts', accounts_js_1.accountRoutes);
+app.use('/transactions', transactions_js_1.transactionRoutes);
 // ─── 404 handler ─────────────────────────────────────────────────────────────
 app.use((_req, res) => {
     res.status(404).json({ success: false, error: 'Route not found' });

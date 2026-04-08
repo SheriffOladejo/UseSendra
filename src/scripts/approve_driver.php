@@ -67,7 +67,7 @@ $message =
 "✅ *Profile Verified!*\n\n".
 "Your rider profile has been approved.\n\n".
 "Next step: Please send your favorite bus-stop location so we can start sending delivery requests near you.\n\n".
-"Use Whatsapp's location📍 feature to select the location on the map\n1. Tap the '+' icon\n2. Select 'Location'\n3. Choose 'Send your current location' or pick a spot on the map\n\nNo worries, you can always change it anytime";
+"Use Whatsapp's location📍 feature to select the location on the map\n1. Tap the '+' icon\n2. Select 'Location'\n3. Choose 'Send your current location' or pick a spot on the map\n\nNo worries, you can always change it anytime\n\nSend a message to 07019240234 if you have any questions.";
 
 $whatsapp->sendMessage($phone, $message);
 

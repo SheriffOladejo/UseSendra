@@ -1,8 +1,8 @@
 // src/index.ts
 import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
-import { accountRoutes } from './routes/accounts';
-import { transactionRoutes } from './routes/transactions';
+import { accountRoutes } from './routes/accounts.js';
+import { transactionRoutes } from './routes/transactions.js';
 
 const app = express();
 app.use(express.json());

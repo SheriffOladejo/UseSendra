@@ -4,8 +4,8 @@ exports.accountRoutes = void 0;
 // src/routes/accounts.ts
 const express_1 = require("express");
 const ts_sdk_1 = require("@aptos-labs/ts-sdk");
-const aptosClient_1 = require("../services/aptosClient");
-const keyManager_1 = require("../services/keyManager");
+const aptosClient_js_1 = require("../services/aptosClient.js");
+const keyManager_js_1 = require("../services/keyManager.js");
 const router = (0, express_1.Router)();
 exports.accountRoutes = router;
 // ─── Middleware: verify internal secret ───────────────────────────────────────
@@ -40,7 +40,7 @@ router.post('/create', async (req, res) => {
         const address = account.accountAddress.toString();
         const privateKeyHex = account.privateKey.toString();
         // 2. Encrypt private key — this is what gets stored in your DB
-        const encryptedKey = (0, keyManager_1.encryptKey)(privateKeyHex);
+        const encryptedKey = (0, keyManager_js_1.encryptKey)(privateKeyHex);
         console.log(`[accounts/create] New account created for ${phone_number}: ${address}`);
         res.json({
             success: true,
@@ -76,7 +76,7 @@ router.post('/balance', async (req, res) => {
         // APT balance
         let aptRaw = 0;
         try {
-            const aptRes = await aptosClient_1.aptos.getAccountResource({
+            const aptRes = await aptosClient_js_1.aptos.getAccountResource({
                 accountAddress: aptos_address,
                 resourceType: '0x1::coin::CoinStore<0x1::aptos_coin::AptosCoin>',
             });
@@ -88,7 +88,7 @@ router.post('/balance', async (req, res) => {
         // Fungible asset balances (USDC / USDT)
         const getFaBalance = async (metadataAddress) => {
             try {
-                const result = await aptosClient_1.aptos.view({
+                const result = await aptosClient_js_1.aptos.view({
                     payload: {
                         function: '0x1::primary_fungible_store::balance',
                         typeArguments: ['0x1::fungible_asset::Metadata'],
@@ -135,7 +135,7 @@ router.post('/validate-key', (req, res) => {
         return;
     }
     try {
-        const decrypted = (0, keyManager_1.decryptKey)(encrypted_private_key);
+        const decrypted = (0, keyManager_js_1.decryptKey)(encrypted_private_key);
         // Only return a partial key so this can't be used to extract full keys in prod
         res.json({
             success: true,

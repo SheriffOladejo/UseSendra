@@ -1,9 +1,10 @@
 // src/routes/transactions.ts
 import { Router, Request, Response } from 'express';
 import { Account, Deserializer, Ed25519PrivateKey, SimpleTransaction } from '@aptos-labs/ts-sdk';
-import { aptos } from '../services/aptosClient';
-import { decryptKey } from '../services/keyManager';
+import { aptos } from '../services/aptosClient.js';
+import { decryptKey } from '../services/keyManager.js';
 import { ScriptComposerClient } from '@smoothsend/sdk';
+
 
 const router = Router();
 
@@ -98,10 +99,6 @@ router.post('/execute', async (req: Request, res: Response) => {
       decimals: 6,
       symbol: upperCurrency
     });
-    console.log('[smoothsend] build response:', JSON.stringify({
-      feeBreakdown: fee,
-      txBytesLength: transactionBytes.length,
-    }));
 
     // ── Deserialize the transaction bytes SmoothSend returned ──
     const txBytes = new Uint8Array(transactionBytes);
