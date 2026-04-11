@@ -23,11 +23,16 @@ echo "Cron started...\n";
 |--------------------------------------------------------------------------
 */
 
+// Modified query to include last_message_at for window checking
 $query = $db->query("
-    SELECT phone_number, current_step
-    FROM whatsapp_sessions
-    WHERE current_step IS NOT NULL
-    AND current_step NOT IN ('rider_ready','in_review','rider_approved')
+    SELECT 
+        ws.phone_number, 
+        ws.current_step,
+        d.last_message_at
+    FROM whatsapp_sessions ws
+    LEFT JOIN drivers d ON d.phone = ws.phone_number
+    WHERE ws.current_step IS NOT NULL
+    AND ws.current_step NOT IN ('rider_ready','in_review','rider_approved')
 ");
 
 $stepsMap = [
@@ -49,6 +54,7 @@ while ($row = $query->fetch(PDO::FETCH_ASSOC)) {
 
     $phone = $row['phone_number'];
     $currentStep = $row['current_step'];
+    $lastMessageAt = $row['last_message_at'];
 
     echo "Onboarding reminder → {$phone} ({$currentStep})\n";
 
@@ -58,12 +64,27 @@ while ($row = $query->fetch(PDO::FETCH_ASSOC)) {
         continue;
     }
 
-    $whatsapp->sendMessage(
-        $phone,
-        "Hi 👋 You haven’t completed your Sendra rider profile.\n\n".
+    $messageText = 
+        "Hi 👋 You haven't completed your Sendra rider profile.\n\n".
         "{$nextStepMessage}\n\n".
-        "Send *hi* to continue or message 07019240234 if you have any questions."
-    );
+        "Send *hi* to continue or message 07019240234 if you have any questions.";
+
+    // Check if within 24-hour messaging window
+    if (isWithinMessagingWindow($lastMessageAt)) {
+        // Send regular message
+        $whatsapp->sendMessage($phone, $messageText);
+        echo "  → Sent regular message\n";
+    } else {
+        // Send template (you need to create this in Meta Business Manager)
+        // Template name: "incomplete_onboarding_reminder"
+        // For now, we'll skip or send template if you have it set up
+        $whatsapp->sendTemplate(
+            $phone,
+            'incomplete_onboarding_reminder', // Create this template in Meta
+            [$nextStepMessage]
+        );
+        echo "  → Sent template (outside 24hr window)\n";
+    }
 }
 
 
@@ -74,7 +95,10 @@ while ($row = $query->fetch(PDO::FETCH_ASSOC)) {
 */
 
 $locationQuery = $db->query("
-    SELECT phone, first_name
+    SELECT 
+        phone, 
+        first_name,
+        last_message_at
     FROM drivers
     WHERE verification_status = 'approved'
     AND (preferred_latitude IS NULL OR preferred_longitude IS NULL)
@@ -84,17 +108,53 @@ while ($row = $locationQuery->fetch(PDO::FETCH_ASSOC)) {
 
     $phone = $row['phone'];
     $firstName = $row['first_name'] ?? '';
+    $lastMessageAt = $row['last_message_at'];
 
     echo "Location reminder → {$phone}\n";
 
-    $whatsapp->sendMessage(
-        $phone,
+    $messageText = 
         "Hi {$firstName}! 🎉 Your Sendra rider account is approved.\n\n".
         "To start receiving delivery requests, please set your *preferred bus-stop location*.\n\n".
         "This helps Sendra send you deliveries close to where you are.\n\n".
         "Use Whatsapp's location📍 feature to select the location on the map\n1. Tap the '+' icon\n2. Select 'Location'\n3. Choose 'Send your current location' or pick a spot on the map\n\n".
-        "You can update this anytime as you change locations.\n\n"
-    );
+        "You can update this anytime as you change locations.\n\n";
+
+    // Check if within 24-hour messaging window
+    if (isWithinMessagingWindow($lastMessageAt)) {
+        // Send regular message
+        $whatsapp->sendMessage($phone, $messageText);
+        echo "  → Sent regular message\n";
+    } else {
+        // Send template
+        $whatsapp->sendTemplate(
+            $phone,
+            'location_setup_reminder', // Create this template in Meta
+            [$firstName]
+        );
+        echo "  → Sent template (outside 24hr window)\n";
+    }
 }
 
 echo "Cron finished\n";
+
+/**
+ * Helper function to check if we're within WhatsApp's 24-hour messaging window
+ * 
+ * @param string|null $lastMessageAt MySQL timestamp
+ * @return bool True if within window, false otherwise
+ */
+function isWithinMessagingWindow($lastMessageAt)
+{
+    if ($lastMessageAt === null) {
+        return false; // Never messaged - outside window
+    }
+
+    $lastMessageTime = strtotime($lastMessageAt);
+    $currentTime = time();
+    $timeSinceLastMessage = $currentTime - $lastMessageTime;
+    
+    // 24 hours in seconds
+    $messagingWindowSeconds = 24 * 60 * 60;
+
+    return $timeSinceLastMessage < $messagingWindowSeconds;
+}

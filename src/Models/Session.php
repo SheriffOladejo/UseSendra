@@ -72,12 +72,28 @@ class Session
             $sql = "UPDATE {$this->table} SET " . implode(', ', $fields) . " WHERE phone_number = :phone";
 
             $stmt = $this->db->prepare($sql);
+            $this->updateDriverLastMessageTime($phone);
 
             return $stmt->execute($params);
 
         } catch (\PDOException $e) {
             error_log("Error updating session: " . $e->getMessage());
             return false;
+        }
+    }
+
+    protected function updateDriverLastMessageTime($phone)
+    {
+        try {
+            $stmt = $this->db->prepare("
+                UPDATE drivers 
+                SET last_message_at = NOW() 
+                WHERE phone = ?
+            ");
+            $stmt->execute([$phone]);
+        } catch (\Exception $e) {
+            // Log error but don't break the flow
+            error_log("Failed to update last_message_at for {$phone}: " . $e->getMessage());
         }
     }
 

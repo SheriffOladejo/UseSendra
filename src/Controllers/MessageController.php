@@ -1229,4 +1229,236 @@ class MessageController
             return ['success' => false, 'message' => $error];
         }
     }
+
+
+    /**
+     * Parse offramp command: "send 20000 naira to 8164727987 opay"
+     */
+    private function handleOfframpCommand($from, $message, $user)
+    {
+        // Parse: send [amount] naira to [account_number] [bank_code/name]
+        if (!preg_match('/send\s+(\d+(?:\.\d{2})?)\s+naira\s+to\s+(\d{10})\s+(\w+)/i', $message, $matches)) {
+            $this->whatsappService->sendMessage(
+                $from,
+                "⚠️ Format: *send [amount] naira to [account] [bank]*\n\n" .
+                "Example: `send 20000 naira to 8164727987 opay`\n\n" .
+                "Supported banks: opay, kuda, gtb, access, zenith, etc."
+            );
+            return ['success' => false];
+        }
+
+        $amountNaira = $matches[1];
+        $accountNumber = $matches[2];
+        $bankIdentifier = strtolower($matches[3]);
+
+        // Map bank names to codes (you'll need a complete mapping)
+        $bankCodes = [
+            'opay' => '999992',
+            'kuda' => '090267',
+            'gtb' => '058',
+            'access' => '044',
+            'zenith' => '057',
+            // Add more banks
+        ];
+
+        $bankCode = $bankCodes[$bankIdentifier] ?? null;
+
+        if (!$bankCode) {
+            $this->whatsappService->sendMessage(
+                $from,
+                "❌ Unknown bank: *{$bankIdentifier}*\n\n" .
+                "Supported: opay, kuda, gtb, access, zenith"
+            );
+            return ['success' => false];
+        }
+
+        return $this->processOfframpRequest($from, $user, $amountNaira, $accountNumber, $bankCode);
+    }
+
+    /**
+     * Step 1: Lookup account and get rate
+     */
+    private function processOfframpRequest($from, $user, $amountNaira, $accountNumber, $bankCode)
+    {
+        $centivService = new \App\Services\CentivService();
+
+        $this->whatsappService->sendMessage($from, "🔍 Looking up account details...");
+
+        // Account lookup
+        $accountInfo = $centivService->lookupBankAccount($accountNumber, $bankCode);
+
+        if (!$accountInfo['success']) {
+            $this->whatsappService->sendMessage(
+                $from,
+                "❌ Could not verify account. Please check the details and try again."
+            );
+            return ['success' => false];
+        }
+
+        // Get exchange rate
+        $rateInfo = $centivService->getExchangeRate('USDC', $amountNaira);
+
+        if (!$rateInfo['success']) {
+            $this->whatsappService->sendMessage(
+                $from,
+                "❌ Could not fetch exchange rate. Please try again."
+            );
+            return ['success' => false];
+        }
+
+        $cryptoAmount = $rateInfo['crypto_amount'];
+        $rate = $rateInfo['rate'];
+        $fee = $rateInfo['fee'];
+
+        // Check user balance
+        $balances = $this->fetchAptosBalance($user['aptos_address']);
+        $usdcBalance = floatval(str_replace(',', '', $balances['USDC']));
+
+        if ($usdcBalance < $cryptoAmount) {
+            $this->whatsappService->sendMessage(
+                $from,
+                "❌ Insufficient balance\n\n" .
+                "Required: *{$cryptoAmount} USDC*\n" .
+                "Available: *{$usdcBalance} USDC*\n\n" .
+                "Type `/balance` to check your wallet."
+            );
+            return ['success' => false, 'reason' => 'insufficient_balance'];
+        }
+
+        // Store pending offramp transaction
+        $pendingId = $this->storePendingOfframp([
+            'user_phone' => $from,
+            'amount_naira' => $amountNaira,
+            'crypto_amount' => $cryptoAmount,
+            'currency' => 'USDC',
+            'rate' => $rate,
+            'fee' => $fee,
+            'account_number' => $accountNumber,
+            'account_name' => $accountInfo['account_name'],
+            'bank_code' => $bankCode,
+            'bank_name' => $accountInfo['bank_name'],
+            'expires_at' => date('Y-m-d H:i:s', time() + 300)
+        ]);
+
+        $this->userModel->setPendingTransaction($from, $pendingId);
+
+        // Show confirmation
+        $this->whatsappService->sendButtonMessage(
+            $from,
+            "💸 *Confirm Withdrawal*\n\n" .
+            "📤 Send: ₦{$amountNaira}\n" .
+            "💰 Cost: *{$cryptoAmount} USDC*\n" .
+            "📊 Rate: ₦{$rate}/USDC\n" .
+            "💵 Fee: ₦{$fee}\n\n" .
+            "🏦 *Recipient Details:*\n" .
+            "Name: *{$accountInfo['account_name']}*\n" .
+            "Account: {$accountNumber}\n" .
+            "Bank: {$accountInfo['bank_name']}\n\n" .
+            "⚠️ Please verify the account name is correct.\n\n" .
+            "Enter your *6-digit PIN* to confirm:",
+            ['cancel_' . $pendingId => '❌ Cancel']
+        );
+
+        return ['success' => true, 'pending_id' => $pendingId];
+    }
+
+    /**
+     * Execute offramp after PIN confirmation
+     */
+    private function executeOfframp($from, $user, $pending)
+    {
+        $centivService = new \App\Services\CentivService();
+
+        $this->whatsappService->sendMessage($from, "⏳ Processing withdrawal...");
+
+        // Step 1: Burn/transfer USDC from user's wallet to Sendra's settlement wallet
+        // (You'll need a settlement wallet address for this)
+        $settlementWallet = $_ENV['SENDRA_SETTLEMENT_WALLET'];
+
+        $ch = curl_init('http://127.0.0.1:3001/transactions/execute');
+        curl_setopt_array($ch, [
+            CURLOPT_POST => true,
+            CURLOPT_POSTFIELDS => json_encode([
+                'sender_address' => $user['aptos_address'],
+                'encrypted_private_key' => $user['encrypted_private_key'],
+                'recipient' => $settlementWallet,
+                'amount' => $pending['crypto_amount'],
+                'currency' => $pending['currency']
+            ]),
+            CURLOPT_HTTPHEADER => [
+                'Content-Type: application/json',
+                'X-Internal-Secret: ' . $_ENV['INTERNAL_API_SECRET']
+            ],
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT => 30
+        ]);
+        $burnResult = json_decode(curl_exec($ch), true);
+        curl_close($ch);
+
+        if (empty($burnResult['success'])) {
+            $this->whatsappService->sendMessage(
+                $from,
+                "❌ Blockchain transaction failed. Your funds are safe.\n\n" .
+                "Please try again or contact support."
+            );
+            return ['success' => false];
+        }
+
+        $txHash = $burnResult['tx_hash'];
+
+        // Step 2: Create Centiv order
+        $orderRef = 'SENDRA_' . bin2hex(random_bytes(8));
+        
+        $orderResult = $centivService->createOfframpOrder([
+            'currency' => $pending['currency'],
+            'crypto_amount' => $pending['crypto_amount'],
+            'fiat_amount' => $pending['amount_naira'],
+            'account_number' => $pending['account_number'],
+            'account_name' => $pending['account_name'],
+            'bank_code' => $pending['bank_code'],
+            'customer_phone' => $from,
+            'reference' => $orderRef
+        ]);
+
+        if (!$orderResult['success']) {
+            // Order failed but crypto already sent - needs manual reconciliation
+            error_log("CRITICAL: Offramp crypto sent but Centiv order failed | user=$from tx=$txHash");
+            
+            $this->whatsappService->sendMessage(
+                $from,
+                "⚠️ Payment processing issue detected.\n\n" .
+                "Your crypto has been secured. Our team will complete your transfer within 24 hours.\n\n" .
+                "Reference: {$orderRef}\n" .
+                "Support: support@usesendra.com"
+            );
+            
+            return ['success' => false, 'needs_reconciliation' => true];
+        }
+
+        // Success!
+        $receiptUrl = $orderResult['receipt_url'];
+        
+        $this->updatePendingOfframpStatus($pending['id'], 'completed', $txHash, $orderResult['order_id']);
+
+        $message = "✅ *Withdrawal Successful!*\n\n" .
+            "💸 ₦{$pending['amount_naira']} sent to:\n" .
+            "*{$pending['account_name']}*\n" .
+            "{$pending['account_number']} ({$pending['bank_name']})\n\n" .
+            "📊 *Transaction Details:*\n" .
+            "USDC Spent: {$pending['crypto_amount']}\n" .
+            "Rate: ₦{$pending['rate']}/USDC\n" .
+            "Fee: ₦{$pending['fee']}\n\n" .
+            "🔗 Blockchain: https://explorer.aptoslabs.com/txn/{$txHash}?network=testnet\n";
+
+        if ($receiptUrl) {
+            $message .= "📄 Receipt: {$receiptUrl}\n";
+        }
+
+        $message .= "\n⏱️ Funds should arrive within 5-10 minutes.";
+
+        $this->whatsappService->sendMessage($from, $message);
+
+        return ['success' => true];
+    }
+
 }

@@ -42,7 +42,7 @@ Please use WhatsApp's location sharing feature:
 
         $this->whatsappService->sendMessage(
             $phone,
-            "Got it! Please give more context on the details of the pikcup and drop-off location or the delivery in general.\n\nFor example, you can mention landmarks, building names, or any specific instructions for the driver."
+            "Got it! Please give more context or specific instructions for the driver."
         );
 
         return '';

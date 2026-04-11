@@ -304,27 +304,75 @@ class WhatsAppService
         return $result;
     }
 
+    public function sendTemplateWithButtons($to, $templateName, $parameters = [], $requestId = null)
+    {
+        return $this->sendTemplate($to, $templateName, $parameters);
+    }
+
 
     /**
      * Send template message
      */
-    public function sendTemplate($to, $templateName, $languageCode = 'en_US')
-    {
-        $url = "https://graph.facebook.com/v20.0/{$this->phoneNumberId}/messages";
-
-        $payload = json_encode([
-            "messaging_product" => "whatsapp",
-            "recipient_type" => "individual",
-            "to" => $to,
-            "type" => "template",
-            "template" => [
-                "name" => $templateName,
-                "language" => ["code" => $languageCode]
-            ]
-        ]);
-
-        return $this->makeRequest($url, $payload);
-    }
+    public function sendTemplate($to, $templateName, $parameters = [], $languageCode = 'en')
+        {
+            $url = "https://graph.facebook.com/v21.0/{$this->phoneNumberId}/messages";
+    
+            $components = [];
+            
+            // Add body parameters if provided
+            if (!empty($parameters)) {
+                $bodyParameters = [];
+                foreach ($parameters as $value) {
+                    $bodyParameters[] = [
+                        'type' => 'text',
+                        'text' => (string)$value
+                    ];
+                }
+    
+                $components[] = [
+                    'type' => 'body',
+                    'parameters' => $bodyParameters
+                ];
+            }
+    
+            // NOTE: Button components are NOT added here
+            // Buttons are defined in the template itself in Meta Business Manager
+            // They are static and cannot be changed per message
+    
+            $payload = [
+                'messaging_product' => 'whatsapp',
+                'to' => $to,
+                'type' => 'template',
+                'template' => [
+                    'name' => $templateName,
+                    'language' => [
+                        'code' => $languageCode
+                    ],
+                    'components' => $components
+                ]
+            ];
+    
+            $ch = curl_init($url);
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_POST, true);
+            curl_setopt($ch, CURLOPT_HTTPHEADER, [
+                'Authorization: Bearer ' . $this->accessToken,
+                'Content-Type: application/json'
+            ]);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
+    
+            $response = curl_exec($ch);
+            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            curl_close($ch);
+    
+            $responseData = json_decode($response, true);
+    
+            if ($httpCode !== 200) {
+                error_log("Template send failed to {$to}: " . json_encode($responseData));
+            }
+    
+            return $responseData;
+        }
 
     /**
      * Extract user info from webhook payload
@@ -516,3 +564,4 @@ class WhatsAppService
         return $response;
     }
 }
+    

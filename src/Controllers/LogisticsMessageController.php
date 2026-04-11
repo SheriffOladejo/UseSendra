@@ -56,6 +56,7 @@ class LogisticsMessageController
         // ─────────────────────────────
 
         $session = $sessionModel->findByPhone($phoneNumber);
+        //$pendingRequestId = $session['session_data']['pending_delivery_request'] ?? null;
 
         if (!$session) {
 
@@ -67,6 +68,7 @@ class LogisticsMessageController
                 'data' => '{}'
             ];
         }
+        
 
         // ─────────────────────────────
         // 3️⃣ Initialize StepRouter
