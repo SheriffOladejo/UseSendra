@@ -60,4 +60,20 @@ class PaymentMethodStep extends BaseStep
     {
         return in_array(strtolower(trim($message)), ['cash','transfer','💵','💳']);
     }
+
+    public function sendValidationFailureFeedback(string $phoneNumber): void
+    {
+        $err = trim($this->getValidationError());
+        if ($err !== '') {
+            $this->whatsappService->sendMessage($phoneNumber, $err);
+        }
+        $this->whatsappService->sendButtonMessage(
+            $phoneNumber,
+            'Choose a payment method:',
+            [
+                'cash'     => '💵 Cash',
+                'transfer' => '💳 Bank Transfer',
+            ]
+        );
+    }
 }

@@ -48,21 +48,26 @@ class VehicleTypeStep extends BaseStep
 
         $validKeys = ['motorcycle', 'keke'];
 
-        if (!in_array($msg, $validKeys)) {
-            $validTypes = [
-                'motorcycle' => $t->get('vehicle_motorcycle'),
-                'keke'       => $t->get('vehicle_keke')
-            ];
-            $this->whatsappService->sendButtonMessage(
-                $this->session['phone_number'],
-                $t->get('invalid_vehicle_type'),
-                $validTypes
-            );
+        if (!in_array($msg, $validKeys, true)) {
             $this->validationError = $t->get('invalid_vehicle_type');
-            // optionally resend buttons here too
             return false;
         }
 
         return true;
+    }
+
+    public function sendValidationFailureFeedback(string $phoneNumber): void
+    {
+        $lang = $this->session['language'] ?? 'en';
+        $t    = new Translator($lang);
+        $validTypes = [
+            'motorcycle' => $t->get('vehicle_motorcycle'),
+            'keke'       => $t->get('vehicle_keke'),
+        ];
+        $this->whatsappService->sendButtonMessage(
+            $phoneNumber,
+            $t->get('invalid_vehicle_type'),
+            $validTypes
+        );
     }
 }

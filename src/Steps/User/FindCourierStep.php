@@ -3,6 +3,7 @@
 namespace App\Steps\User;
 
 use App\Jobs\FindNearbyCouriersJob;
+use App\Models\UserBlockedDriver;
 
 use App\Steps\BaseStep;
 
@@ -27,17 +28,30 @@ class FindCourierStep extends BaseStep
             'bidding_expires_at' => $biddingExpires
         ]);
 
-        // Dispatch background job
+        $blocked = [];
+        $reqRow = $this->deliveryRequestModel->findById($requestId);
+        if (!empty($reqRow['user_id'])) {
+            $blockedModel = new UserBlockedDriver($this->deliveryRequestModel->getDb());
+            $blocked = $blockedModel->listBlockedDriverIdsForUser((int) $reqRow['user_id']);
+        }
+
         $job = new FindNearbyCouriersJob(
             $requestId,
             $this->driverModel,
             $this->deliveryRequestModel,
-            $this->whatsappService
+            $this->whatsappService,
+            $blocked
         );
 
-        $job->handle(); // later this can go to queue
+        $notified = $job->handle();
 
-        return "🚀 Your delivery request is now live!\n\nWe're searching for nearby couriers.\n\nYou'll be notified once a rider accepts.";
+        $reqAfter = $this->deliveryRequestModel->findById($requestId);
+        $n = (int) ($reqAfter['drivers_notified_count'] ?? $notified);
+        if ($n < 1) {
+            return "🚀 Request #{$requestId} is live.\n\n⚠️ No riders matched nearby yet. We'll notify you when someone accepts, or try again later from the menu.";
+        }
+
+        return "🚀 Request #{$requestId} is live.\n\n📡 Pinged {$n} rider(s). You'll get a message when a rider is assigned.\n\nIf no one takes it before search ends, we'll tell you.";
     }
 
     public function validateInput(string $message): bool

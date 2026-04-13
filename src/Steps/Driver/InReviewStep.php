@@ -7,13 +7,7 @@ use App\Utils\Translator;
 
 class InReviewStep extends BaseStep
 {
-    protected string $validationError;
-
-    public function __construct()
-    {
-        // Default error message if translation fails
-        $this->validationError = "⏳ Your account is under review. Please wait while we complete verification.";
-    }
+    protected string $validationError = '⏳ Your account is under review. Please wait while we complete verification.';
 
     /**
      * Handle messages from drivers whose accounts are pending verification
@@ -34,13 +28,13 @@ class InReviewStep extends BaseStep
 
         switch ($status) {
             case 'approved':
-                $this->nextStep($phone, 'driver_active');
-                return $t->get('in_review_approved'
-                );
+            case 'approved_test':
+            case 'approved_paused':
+                $this->nextStep($phone, 'rider_approved');
+                return $t->get('in_review_approved');
 
             case 'rejected':
-                return $t->get('in_review_rejected'
-                );
+                return $t->get('in_review_rejected');
 
             case 'pending':
             default:
@@ -57,7 +51,12 @@ class InReviewStep extends BaseStep
     {
         $message = strtolower(trim($message));
         $allowedCommands = ['status', 'help', 'support', 'reapply'];
-        return in_array($message, $allowedCommands);
+        if (in_array($message, $allowedCommands, true)) {
+            return true;
+        }
+        $lang = $this->session['language'] ?? 'en';
+        $this->validationError = (new Translator($lang))->get('in_review_message');
+        return false;
     }
 
     /**

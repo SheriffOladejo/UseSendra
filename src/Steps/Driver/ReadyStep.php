@@ -3,64 +3,34 @@
 namespace App\Steps\Driver;
 
 use App\Steps\BaseStep;
-use App\Utils\Translator;
 
+/**
+ * Idle “home” for approved riders waiting for job offers (step key: rider_ready).
+ * Do not change drivers.status here — job matching requires status = active.
+ */
 class ReadyStep extends BaseStep
 {
     protected string $validationError;
 
-    /**
-     * Handle final rider onboarding confirmation
-     */
     public function handle(array $session, $message): string
     {
         $phone = $session['phone_number'];
-        $lang  = $session['language'] ?? 'en';
-        $t     = new Translator($lang);
 
-        // Update rider status in DB to 'ready'
-        $this->driverModel->update($phone, [
-            'status' => 'ready'
-        ]);
-
-        // Mark step as complete
-        //$this->nextStep($phone, 'rider_ready');
-
-        // Send review info message (multilingual)
         $this->whatsappService->sendMessage(
             $phone,
-            $t->get('in_review_message')
+            "🚚 *Sendra rider*\n\n"
+            . "You’re online for nearby offers.\n\n"
+            . "• Use *Accept* / *Counter* / *Decline* on each job\n"
+            . "• After pickup, the sender confirms you; at dropoff type the receiver’s *4-digit code* (digits only)\n"
+            . "• If a customer asks for your location, send a map pin when prompted\n\n"
+            . 'Say *hi* anytime for this reminder.'
         );
 
         return '';
     }
 
-    /**
-     * Validate input for this step (any input is fine)
-     */
     public function validateInput($message): bool
     {
         return true;
-    }
-
-    /**
-     * Optional: format timestamp into "x minutes/hours/days ago"
-     */
-    private function formatTimeAgo(int $timestamp): string
-    {
-        $diff = time() - $timestamp;
-
-        if ($diff < 60) {
-            return 'just now';
-        } elseif ($diff < 3600) {
-            $mins = floor($diff / 60);
-            return $mins . ' minute' . ($mins > 1 ? 's' : '') . ' ago';
-        } elseif ($diff < 86400) {
-            $hours = floor($diff / 3600);
-            return $hours . ' hour' . ($hours > 1 ? 's' : '') . ' ago';
-        } else {
-            $days = floor($diff / 86400);
-            return $days . ' day' . ($days > 1 ? 's' : '') . ' ago';
-        }
     }
 }

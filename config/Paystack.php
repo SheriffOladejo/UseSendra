@@ -1,7 +1,9 @@
 <?php
-// sk_test_29041db37bb64fa66635e37c76df4a6ae9546156
-// sk_test_6ce4d99cbee5a6b6dcdcbb3357f0bebb7942d82e
+
+$secret = $_ENV['PAYSTACK_SECRET_KEY'] ?? getenv('PAYSTACK_SECRET_KEY') ?: '';
+$base = $_ENV['PAYSTACK_BASE_URL'] ?? getenv('PAYSTACK_BASE_URL') ?: 'https://api.paystack.co';
+
 return [
-    'secret_key' => 'sk_test_6ce4d99cbee5a6b6dcdcbb3357f0bebb7942d82e',
-    'base_url' => 'https://api.paystack.co'
+    'secret_key' => $secret,
+    'base_url' => rtrim($base, '/'),
 ];

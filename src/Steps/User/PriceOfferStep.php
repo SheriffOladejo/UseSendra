@@ -2,6 +2,7 @@
 
 namespace App\Steps\User;
 
+use App\Services\DeliveryPricingService;
 use App\Steps\BaseStep;
 
 class PriceOfferStep extends BaseStep
@@ -18,6 +19,11 @@ class PriceOfferStep extends BaseStep
 
         // User accepts the estimated price
         if (strtolower($choice) === 'yes') {
+            $row = $this->deliveryRequestModel->findById($requestId);
+            if ($row && (empty($row['offered_price']) || (float) $row['offered_price'] <= 0)) {
+                $est = DeliveryPricingService::fromEnv()->estimateForDeliveryRequest($row, $this->driverModel);
+                $this->deliveryRequestModel->update($requestId, ['offered_price' => $est]);
+            }
 
             $this->nextStep($phone, 'payer');
 
@@ -61,8 +67,40 @@ class PriceOfferStep extends BaseStep
     public function validateInput(string $message): bool
     {
         $choice = trim($message);
-        if (strtolower($choice) === 'yes') return true;
-        if (is_numeric(filter_var($choice, FILTER_SANITIZE_NUMBER_FLOAT, FILTER_FLAG_ALLOW_FRACTION)) && $choice > 0) return true;
-        return false;
+        if (strtolower($choice) === 'yes') {
+            return true;
+        }
+        $numeric = filter_var($choice, FILTER_SANITIZE_NUMBER_FLOAT, FILTER_FLAG_ALLOW_FRACTION);
+
+        return is_numeric($numeric) && (float) $numeric > 0;
+    }
+
+    public function sendValidationFailureFeedback(string $phoneNumber): void
+    {
+        $err = trim($this->getValidationError());
+        if ($err !== '') {
+            $this->whatsappService->sendMessage($phoneNumber, $err);
+        }
+
+        $requestId      = $this->session['delivery_request_id'] ?? null;
+        $estimatedPrice = 800;
+        if ($requestId) {
+            $row = $this->deliveryRequestModel->findById($requestId);
+            if ($row) {
+                if (!empty($row['offered_price']) && (float) $row['offered_price'] > 0) {
+                    $estimatedPrice = (float) $row['offered_price'];
+                } else {
+                    $estimatedPrice = (float) DeliveryPricingService::fromEnv()->estimateForDeliveryRequest($row, $this->driverModel);
+                }
+            }
+        }
+        $priceKey = (string) (int) $estimatedPrice;
+        $this->whatsappService->sendButtonMessage(
+            $phoneNumber,
+            "The estimated price is ₦{$estimatedPrice}.\n\nTap Yes to proceed or type your preferred price in numbers.",
+            [
+                $priceKey => 'Yes, proceed',
+            ]
+        );
     }
 }

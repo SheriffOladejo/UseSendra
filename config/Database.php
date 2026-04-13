@@ -1,5 +1,14 @@
 <?php
 
+$autoload = __DIR__ . '/../vendor/autoload.php';
+if (is_readable($autoload)) {
+    require_once $autoload;
+}
+$bootstrapEnv = __DIR__ . '/bootstrap_env.php';
+if (is_readable($bootstrapEnv)) {
+    require_once $bootstrapEnv;
+}
+
 $bots = require __DIR__ . '/Bots.php';
 
 class Database {

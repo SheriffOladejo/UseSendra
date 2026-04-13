@@ -37,7 +37,8 @@ class PickupAddressStep extends BaseStep
                "Now, please share the pickup location using WhatsApp's location sharing feature:\n" .
                "1. Tap the '+' icon\n" .
                "2. Select 'Location'\n" .
-               "3. Choose 'Send your current location' or pick another location on the map";
+               "3. Choose 'Send your current location' or pick another location on the map\n\n" .
+               '_Tip: type *restart* anytime to cancel this order and return to the menu._';
     }
 
     public function validateInput(string $message): bool

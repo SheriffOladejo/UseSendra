@@ -6,7 +6,7 @@ use App\Steps\BaseStep;
 
 class ConfirmationStep extends BaseStep
 {
-    protected string $validationError = "";
+    protected string $validationError = 'Please tap Confirm or Edit below to continue.';
 
     public function handle(array $session, string $message): string
     {
@@ -29,7 +29,8 @@ class ConfirmationStep extends BaseStep
                     'edit' => "✏️ Edit"
                 ]
             );
-        };
+            return '';
+        }
 
         $this->deliveryRequestModel->update($requestId, [
             'status' => 'searching_driver',
@@ -54,5 +55,21 @@ class ConfirmationStep extends BaseStep
     public function validateInput(string $message): bool
     {
         return in_array(strtolower(trim($message)), ['confirm','edit']);
+    }
+
+    public function sendValidationFailureFeedback(string $phoneNumber): void
+    {
+        $err = trim($this->getValidationError());
+        if ($err !== '') {
+            $this->whatsappService->sendMessage($phoneNumber, $err);
+        }
+        $this->whatsappService->sendButtonMessage(
+            $phoneNumber,
+            'Please choose an option to proceed with your order:',
+            [
+                'confirm' => '✅ Confirm',
+                'edit'    => '✏️ Edit',
+            ]
+        );
     }
 }

@@ -1,18 +1,24 @@
 <?php
 
-require __DIR__ . '../../../vendor/autoload.php';
+require dirname(__DIR__, 2) . '/vendor/autoload.php';
+require dirname(__DIR__, 2) . '/config/bootstrap_env.php';
 
 use App\Models\Session;
 use App\Models\LogisticsDriver;
 use App\Services\WhatsAppService;
 
+$host = $_ENV['LOGISTICS_DB_HOST'] ?? getenv('LOGISTICS_DB_HOST') ?: 'localhost';
+$name = $_ENV['LOGISTICS_DB_NAME'] ?? getenv('LOGISTICS_DB_NAME') ?: 'sendra_logistics_db';
+$user = $_ENV['LOGISTICS_DB_USER'] ?? getenv('LOGISTICS_DB_USER') ?: 'developer';
+$pass = $_ENV['LOGISTICS_DB_PASS'] ?? getenv('LOGISTICS_DB_PASS') ?: '';
+$phoneId = $_ENV['WHATSAPP_LOGISTICS_PHONE_NUMBER_ID'] ?? getenv('WHATSAPP_LOGISTICS_PHONE_NUMBER_ID') ?: '1097784993409171';
+$token = $_ENV['WHATSAPP_ACCESS_TOKEN'] ?? getenv('WHATSAPP_ACCESS_TOKEN') ?: '';
+
 $pdo = new PDO(
-    "mysql:host=localhost;dbname=sendra_logistics_db;charset=utf8mb4",
-    "developer",
-    "Stipendly@2026",
-    [
-        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION
-    ]
+    "mysql:host={$host};dbname={$name};charset=utf8mb4",
+    $user,
+    $pass,
+    [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
 );
 
 $phone = $argv[1] ?? null;
@@ -31,7 +37,7 @@ if (empty($reasons)) {
 
 $sessionModel = new Session($pdo);
 $driverModel  = new LogisticsDriver($pdo);
-$whatsapp     = new \App\Services\WhatsAppService("EAAnBMaDNtoUBQeFAjBMFryee3LifVRqjB4NkecAPZAnXKRKcUZA2u9JcilTaICwqa7qJJWNuQctZCH020Ir1SVzO33UcCkuP8s5H45BpyIrZAQDKnJVDS33qZAt0IlOptKZB7aO5ZBytSzYgTTMLFI0e4yrtpp0MyGqkMKbSw4bvMPUA5l91ZCUEZBb4saoChLQZDZD", "1097784993409171");
+$whatsapp = new WhatsAppService($token, $phoneId);
 
 $driver = $driverModel->findByPhone($phone);
 

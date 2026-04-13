@@ -39,6 +39,11 @@ class ShowMenuStep extends BaseStep
             case '🕘':
                 $this->nextStep($phone, 'view_history');
                 return "Loading your order history... 🕘";
+
+            case 'hi':
+            case 'hello':
+            case 'hey':
+                return $this->getMenuText();
         }
 
         return "I didn't understand that.\n\n" . $this->getMenuText();
@@ -55,7 +60,8 @@ class ShowMenuStep extends BaseStep
             'send', '📦',
             'order', 'track', '📍',
             'help', 'support', '❓',
-            'history', '🕘'
+            'history', '🕘',
+            'hi', 'hello', 'hey',
         ];
 
         $this->validationError = "I didn't understand that.\n\n" . $this->getMenuText();
@@ -72,7 +78,9 @@ class ShowMenuStep extends BaseStep
                "- 📦 To send a package — type *send*\n" .
                "- 📍 To track your order — type *order*\n" .
                "- ❓ To get help/support — type *help*\n" .
-               "- 🕘 To see your history — type *history*";
+               "- 🕘 To see your history — type *history*\n" .
+               "- 🔄 Stuck on an old search? — type *restart*\n"
+               . '- 📍 *track* — during an active job, ask your rider for their map location';
     }
 
     private function normalizeInput($message): string

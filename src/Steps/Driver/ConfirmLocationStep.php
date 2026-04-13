@@ -77,4 +77,36 @@ class ConfirmLocationStep extends BaseStep
 
         return false;
     }
+
+    public function sendValidationFailureFeedback(string $phoneNumber): void
+    {
+        $lang = $this->session['language'] ?? 'en';
+        $t    = new Translator($lang);
+        $body = trim($this->getValidationError());
+        if ($body === '') {
+            $body = $t->get('confirm_location_error');
+        }
+        $this->whatsappService->sendMessage($phoneNumber, $body);
+
+        $driver = $this->driverModel->findByPhone($phoneNumber);
+        if (
+            $driver
+            && isset($driver['preferred_latitude'], $driver['preferred_longitude'])
+            && $driver['preferred_latitude'] !== null
+            && $driver['preferred_longitude'] !== null
+            && $driver['preferred_latitude'] !== ''
+            && $driver['preferred_longitude'] !== ''
+        ) {
+            $lat    = (float) $driver['preferred_latitude'];
+            $lng    = (float) $driver['preferred_longitude'];
+            $mapUrl = "https://maps.google.com/?q={$lat},{$lng}";
+            $this->whatsappService->sendButtonMessage(
+                $phoneNumber,
+                $t->get('location_confirm_prompt') . "\n\n{$mapUrl}",
+                [
+                    'confirm_location' => $t->get('confirm_location'),
+                ]
+            );
+        }
+    }
 }

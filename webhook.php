@@ -1,5 +1,5 @@
 <?php
-$_ENV['INTERNAL_API_SECRET'] = 'string';
+
 error_reporting(E_ALL);
 ini_set('display_errors', 0); // FIXED: was 1 — PHP errors in response body break WhatsApp's 200 check
 ini_set('log_errors', 1);
@@ -16,6 +16,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 }
 
 require __DIR__ . '/vendor/autoload.php';
+require __DIR__ . '/config/bootstrap_env.php';
 require __DIR__ . '/config/Database.php';
 $botConfigs = require __DIR__ . '/config/Bots.php';
 
@@ -24,11 +25,13 @@ use App\Controllers\LogisticsAuthController;
 use App\Controllers\MessageController;
 use App\Services\WhatsAppService;
 
-$VERIFY_TOKEN    = "214047d9376eba3bc1efc4ff0dc8ffc75c11e88768c999dc9d11e53bc3df5052";
-$ACCESS_TOKEN    = "EAAnBMaDNtoUBQeFAjBMFryee3LifVRqjB4NkecAPZAnXKRKcUZA2u9JcilTaICwqa7qJJWNuQctZCH020Ir1SVzO33UcCkuP8s5H45BpyIrZAQDKnJVDS33qZAt0IlOptKZB7aO5ZBytSzYgTTMLFI0e4yrtpp0MyGqkMKbSw4bvMPUA5l91ZCUEZBb4saoChLQZDZD";
+$_ENV['INTERNAL_API_SECRET'] = $_ENV['INTERNAL_API_SECRET'] ?? getenv('INTERNAL_API_SECRET') ?: 'string';
 
-$SENDRA_APTOS_PHONE_ID = "851265871413834";
-$SENDRA_LOGISTICS_PHONE_ID = "1097784993409171";
+$VERIFY_TOKEN = $_ENV['WHATSAPP_VERIFY_TOKEN'] ?? getenv('WHATSAPP_VERIFY_TOKEN') ?: '';
+$ACCESS_TOKEN = $_ENV['WHATSAPP_ACCESS_TOKEN'] ?? getenv('WHATSAPP_ACCESS_TOKEN') ?: '';
+
+$SENDRA_APTOS_PHONE_ID = $_ENV['WHATSAPP_APTOS_PHONE_NUMBER_ID'] ?? getenv('WHATSAPP_APTOS_PHONE_NUMBER_ID') ?: '851265871413834';
+$SENDRA_LOGISTICS_PHONE_ID = $_ENV['WHATSAPP_LOGISTICS_PHONE_NUMBER_ID'] ?? getenv('WHATSAPP_LOGISTICS_PHONE_NUMBER_ID') ?: '1097784993409171';
 
 $input = json_decode(file_get_contents('php://input'), true);
 $incomingPhoneNumberId = $input['entry'][0]['changes'][0]['value']['metadata']['phone_number_id'] ?? $SENDRA_APTOS_PHONE_ID;

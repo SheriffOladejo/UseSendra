@@ -47,7 +47,22 @@ class PayerStep extends BaseStep
 
     public function validateInput(string $message): bool
     {
-        
         return in_array(strtolower(trim($message)), ['sender','receiver']);
+    }
+
+    public function sendValidationFailureFeedback(string $phoneNumber): void
+    {
+        $err = trim($this->getValidationError());
+        if ($err !== '') {
+            $this->whatsappService->sendMessage($phoneNumber, $err);
+        }
+        $this->whatsappService->sendButtonMessage(
+            $phoneNumber,
+            'Who will pay for the delivery?',
+            [
+                'sender'   => 'Sender',
+                'receiver' => 'Receiver',
+            ]
+        );
     }
 }

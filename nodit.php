@@ -4,11 +4,13 @@
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
 
-// Database configuration
-$DB_HOST = 'localhost';
-$DB_NAME = 'sendra_db';
-$DB_USER = 'developer';
-$DB_PASS = 'Stipendly@2026';
+require __DIR__ . '/vendor/autoload.php';
+require __DIR__ . '/config/bootstrap_env.php';
+
+$DB_HOST = $_ENV['APTOS_DB_HOST'] ?? getenv('APTOS_DB_HOST') ?: 'localhost';
+$DB_NAME = $_ENV['APTOS_DB_NAME'] ?? getenv('APTOS_DB_NAME') ?: 'sendra_db';
+$DB_USER = $_ENV['APTOS_DB_USER'] ?? getenv('APTOS_DB_USER') ?: 'developer';
+$DB_PASS = $_ENV['APTOS_DB_PASS'] ?? getenv('APTOS_DB_PASS') ?: '';
 
 // WhatsApp webhook URL
 $WHATSAPP_WEBHOOK_URL = 'https://coinectra.stipendly.app/webhook.php?action=deposit';

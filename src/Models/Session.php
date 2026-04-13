@@ -102,6 +102,19 @@ class Session
         return $this->update($phone, ['current_step' => $step]);
     }
 
+    /**
+     * After a delivery is archived: clear in-progress fields and land user on role home step.
+     */
+    public function resetLogisticsProgress(string $phone, string $homeStep): bool
+    {
+        return $this->update($phone, [
+            'current_step' => $homeStep,
+            'delivery_request_id' => null,
+            'pending_delivery_request' => null,
+            'counter_request_id' => null,
+        ]);
+    }
+
     public function clear($phone)
     {
         try {

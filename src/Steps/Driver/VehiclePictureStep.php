@@ -66,11 +66,36 @@ class VehiclePictureStep extends BaseStep
             throw new \Exception("Failed to create upload directory");
         }
 
+        if (!is_writable($uploadDir)) {
+            // Try to fix common cases where directory exists but ownership/permissions are wrong.
+            @chmod($uploadDir, 0775);
+        }
+
+        if (!is_writable($uploadDir)) {
+            $perms = @fileperms($uploadDir);
+            $permsOct = $perms !== false ? substr(sprintf('%o', $perms), -4) : 'unknown';
+
+            $uid = function_exists('posix_geteuid') ? (string) posix_geteuid() : 'unknown';
+            $user = function_exists('posix_getpwuid') && function_exists('posix_geteuid')
+                ? ((posix_getpwuid(posix_geteuid())['name'] ?? 'unknown'))
+                : 'unknown';
+
+            error_log(
+                "Upload directory not writable: {$uploadDir} (perms={$permsOct}, euid={$uid}, user={$user})"
+            );
+            throw new \Exception("Upload directory is not writable");
+        }
+
         $timestamp  = time();
         $filename   = $type . '_' . $timestamp . '_' . $imageId . '.jpg';
         $filepath   = $uploadDir . '/' . $filename;
 
-        if (file_put_contents($filepath, $imageContent) === false) {
+        if ($imageContent === false || $imageContent === null || $imageContent === '') {
+            error_log("Downloaded image content was empty for imageId: {$imageId}");
+            throw new \Exception("Downloaded image content was empty");
+        }
+
+        if (file_put_contents($filepath, $imageContent, LOCK_EX) === false) {
             error_log("Failed to save image to: $filepath");
             throw new \Exception("Failed to save image file");
         }

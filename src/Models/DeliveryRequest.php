@@ -14,6 +14,11 @@ class DeliveryRequest
         $this->db = $db;
     }
 
+    public function getDb()
+    {
+        return $this->db;
+    }
+
     public function findById($id)
     {
         try {
@@ -114,7 +119,7 @@ class DeliveryRequest
                 SELECT *
                 FROM {$this->table}
                 WHERE user_id = :user_id
-                AND status NOT IN ('delivered','cancelled')
+                AND status NOT IN ('delivered','cancelled','draft','payment_expired')
                 ORDER BY created_at DESC
                 LIMIT 1
             ");
@@ -126,6 +131,163 @@ class DeliveryRequest
         } catch (\PDOException $e) {
             error_log("Error finding active delivery: " . $e->getMessage());
             return false;
+        }
+    }
+
+    /**
+     * Latest assigned job waiting for sender to confirm rider QR (status driver_assigned).
+     */
+    public function findAssignedAwaitingPickupConfirm(int $userId)
+    {
+        try {
+            $stmt = $this->db->prepare("
+                SELECT * FROM {$this->table}
+                WHERE user_id = ? AND status = 'driver_assigned'
+                ORDER BY created_at DESC LIMIT 1
+            ");
+            $stmt->execute([$userId]);
+            return $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+        } catch (\PDOException $e) {
+            error_log("findAssignedAwaitingPickupConfirm: " . $e->getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * In-transit package waiting for receiver to enter handoff code.
+     */
+    public function findInTransitForReceiverPhone(string $digits)
+    {
+        try {
+            $stmt = $this->db->prepare("
+                SELECT * FROM {$this->table}
+                WHERE status = 'in_transit'
+                AND delivery_handoff_code IS NOT NULL
+                AND dropoff_confirmed_at IS NULL
+                ORDER BY created_at DESC
+            ");
+            $stmt->execute();
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            foreach ($rows as $row) {
+                if (self::phoneDigitsMatch($digits, (string) ($row['receiver_phone'] ?? ''))) {
+                    return $row;
+                }
+            }
+            return null;
+        } catch (\PDOException $e) {
+            error_log("findInTransitForReceiverPhone: " . $e->getMessage());
+            return null;
+        }
+    }
+
+    public static function phoneDigitsMatch(string $a, string $b): bool
+    {
+        $da = preg_replace('/\D/', '', $a);
+        $db = preg_replace('/\D/', '', $b);
+        if ($da === '' || $db === '') {
+            return false;
+        }
+        if ($da === $db) {
+            return true;
+        }
+        return str_ends_with($da, $db) || str_ends_with($db, $da);
+    }
+
+    public function setDriversNotifiedCount(int $requestId, int $count): bool
+    {
+        try {
+            $stmt = $this->db->prepare(
+                "UPDATE {$this->table} SET drivers_notified_count = ? WHERE id = ?"
+            );
+            return $stmt->execute([$count, $requestId]);
+        } catch (\PDOException $e) {
+            error_log("setDriversNotifiedCount: " . $e->getMessage());
+            return false;
+        }
+    }
+
+    public function deleteById(int $id): bool
+    {
+        try {
+            $stmt = $this->db->prepare("DELETE FROM {$this->table} WHERE id = ? LIMIT 1");
+            return $stmt->execute([$id]);
+        } catch (\PDOException $e) {
+            error_log('DeliveryRequest::deleteById: ' . $e->getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Sender’s current job: rider assigned or en route (not yet delivered).
+     */
+    public function findSenderActiveShipment(int $userId): ?array
+    {
+        try {
+            $stmt = $this->db->prepare("
+                SELECT * FROM {$this->table}
+                WHERE user_id = :uid
+                AND status IN ('driver_assigned', 'in_transit')
+                ORDER BY id DESC
+                LIMIT 1
+            ");
+            $stmt->execute(['uid' => $userId]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            return $row ?: null;
+        } catch (\PDOException $e) {
+            error_log('findSenderActiveShipment: ' . $e->getMessage());
+
+            return null;
+        }
+    }
+
+    /**
+     * Rider’s in-transit job waiting for dropoff confirmation (code).
+     */
+    /**
+     * Rider has accepted (or is en route) — job not yet delivered.
+     */
+    public function findOpenAssignedJobForDriver(int $driverId): ?array
+    {
+        try {
+            $stmt = $this->db->prepare("
+                SELECT * FROM {$this->table}
+                WHERE reserved_driver_id = :did
+                AND status IN ('driver_assigned', 'in_transit')
+                ORDER BY id DESC
+                LIMIT 1
+            ");
+            $stmt->execute(['did' => $driverId]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            return $row ?: null;
+        } catch (\PDOException $e) {
+            error_log('findOpenAssignedJobForDriver: ' . $e->getMessage());
+
+            return null;
+        }
+    }
+
+    public function findDriverInTransitOpen(int $driverId): ?array
+    {
+        try {
+            $stmt = $this->db->prepare("
+                SELECT * FROM {$this->table}
+                WHERE reserved_driver_id = :did
+                AND status = 'in_transit'
+                AND delivery_handoff_code IS NOT NULL
+                AND dropoff_confirmed_at IS NULL
+                ORDER BY id DESC
+                LIMIT 1
+            ");
+            $stmt->execute(['did' => $driverId]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            return $row ?: null;
+        } catch (\PDOException $e) {
+            error_log('findDriverInTransitOpen: ' . $e->getMessage());
+
+            return null;
         }
     }
 
@@ -141,6 +303,30 @@ class DeliveryRequest
         $stmt->execute([$reference]);
 
         return $stmt->fetch(PDO::FETCH_ASSOC);
+    }
+
+    /**
+     * Match Centiiv webhook metadata.resourceId (e.g. DPL-dd4ac2).
+     */
+    public function findByCentiivDplId(string $dplId): array|false
+    {
+        if ($dplId === '') {
+            return false;
+        }
+        try {
+            $stmt = $this->db->prepare("
+                SELECT * FROM {$this->table}
+                WHERE centiiv_dpl_id = ?
+                LIMIT 1
+            ");
+            $stmt->execute([$dplId]);
+
+            return $stmt->fetch(PDO::FETCH_ASSOC);
+        } catch (\PDOException $e) {
+            error_log('findByCentiivDplId: ' . $e->getMessage());
+
+            return false;
+        }
     }
 
     public function generateQRCode(string $data, int $size = 200): string {

@@ -2,28 +2,37 @@
 
 namespace App\Jobs;
 
+use App\Models\LogisticsReview;
+use App\Services\WhatsAppMessagingWindow;
+
 class FindNearbyCouriersJob
 {
     private $requestId;
     private $driverModel;
     private $deliveryRequestModel;
     private $whatsappService;
+    /** @var int[] */
+    private array $blockedDriverIds;
 
-    private const MESSAGING_WINDOW_SECONDS = 24 * 60 * 60;
-
-    public function __construct($requestId, $driverModel, $deliveryRequestModel, $whatsappService)
+    public function __construct($requestId, $driverModel, $deliveryRequestModel, $whatsappService, array $blockedDriverIds = [])
     {
         $this->requestId = $requestId;
         $this->driverModel = $driverModel;
         $this->deliveryRequestModel = $deliveryRequestModel;
         $this->whatsappService = $whatsappService;
+        $this->blockedDriverIds = array_map('intval', $blockedDriverIds);
     }
 
-    public function handle()
+    /**
+     * @return int Number of riders notified (after blocks)
+     */
+    public function handle(): int
     {
         $request = $this->deliveryRequestModel->findById($this->requestId);
 
-        if (!$request) return;
+        if (!$request) {
+            return 0;
+        }
 
         $pickup = $request['pickup_address'];
         $dropoff = $request['dropoff_address'];
@@ -33,54 +42,72 @@ class FindNearbyCouriersJob
         $drivers = $this->driverModel->findNearby($lat, $lng);
 
         if (!$drivers) {
-            return;
+            $this->deliveryRequestModel->setDriversNotifiedCount((int) $this->requestId, 0);
+            return 0;
+        }
+
+        $notified = 0;
+        $totalEligible = 0;
+        foreach ($drivers as $driver) {
+            if (in_array((int) $driver['id'], $this->blockedDriverIds, true)) {
+                continue;
+            }
+            $totalEligible++;
         }
 
         foreach ($drivers as $driver) {
-            $this->notifyDriver($driver, $request, $pickup, $dropoff);
+            if (in_array((int) $driver['id'], $this->blockedDriverIds, true)) {
+                continue;
+            }
+            $this->notifyDriver($driver, $request, $pickup, $dropoff, max(0, $totalEligible - 1));
+            $notified++;
         }
+
+        $this->deliveryRequestModel->setDriversNotifiedCount((int) $this->requestId, $notified);
+
+        return $notified;
     }
 
-    private function notifyDriver($driver, $request, $pickup, $dropoff)
+    private function notifyDriver($driver, $request, $pickup, $dropoff, int $otherRidersNotified)
     {
-        $withinWindow = $this->isWithinMessagingWindow($driver);
+        $lastTouch = $driver['last_message_at'] ?? null;
+        if (WhatsAppMessagingWindow::isWithinCustomerCareWindow(is_string($lastTouch) ? $lastTouch : null)) {
+            $this->sendRegularNotification($driver, $request, $pickup, $dropoff, $otherRidersNotified);
 
-        if ($withinWindow) {
-            $this->sendRegularNotification($driver, $request, $pickup, $dropoff);
-        } else {
-            $this->sendTemplateNotification($driver, $request, $pickup, $dropoff);
-            sleep(2); // Small delay to ensure template is sent before retryig with regular message
-            $this->sendRegularNotification($driver, $request, $pickup, $dropoff);
-        }
-    }
-
-    private function isWithinMessagingWindow($driver)
-    {
-        if (!isset($driver['last_message_at']) || $driver['last_message_at'] === null) {
-            return false;
+            return;
         }
 
-        $lastMessageTime = strtotime($driver['last_message_at']);
-        $currentTime = time();
-        $timeSinceLastMessage = $currentTime - $lastMessageTime;
-
-        return $timeSinceLastMessage < self::MESSAGING_WINDOW_SECONDS;
+        // Outside ~23h30m window: template only (session messages would be rejected by Meta).
+        $this->sendTemplateNotification($driver, $request, $pickup, $dropoff);
     }
 
     /**
-     * Send regular interactive message (within 24-hour window)
+     * Send regular interactive message (within customer-care window)
      */
-    private function sendRegularNotification($driver, $request, $pickup, $dropoff)
+    private function sendRegularNotification($driver, $request, $pickup, $dropoff, int $otherRidersNotified)
     {
+        $othersLine = $otherRidersNotified > 0
+            ? "👥 ~{$otherRidersNotified} other rider(s) got this too. First to confirm secures the job.\n\n"
+            : '';
+
+        $custLine = '';
+        try {
+            $rev = new LogisticsReview($this->deliveryRequestModel->getDb());
+            $cs = $rev->summaryForSenderUser((int) ($request['user_id'] ?? 0));
+            $custLine = LogisticsReview::formatAverageStarsLine('Customer', $cs) . "\n\n";
+        } catch (\Throwable $e) {
+            $custLine = "⭐ Customer: no ratings yet\n\n";
+        }
+
         $message =
-            "📦 New Delivery Request\n\n" .
-            "📍 Pickup Location: {$pickup}\n\n" .
-            "📍 Dropoff Location: {$dropoff}\n\n" .
-            "📦 Item: {$request['item_name']}\n\n" .
-            "📝 Description: {$request['item_description']}\n\n" .
-            "💰 Price: ₦{$request['offered_price']}\n\n" .
-            "Do you want to accept this delivery?\n\n" .
-            "You have 90 seconds to respond.";
+            "📦 Job #{$this->requestId} · ₦{$request['offered_price']}\n\n" .
+            $custLine .
+            $othersLine .
+            "📍 Pickup: {$pickup}\n\n" .
+            "📍 Dropoff: {$dropoff}\n\n" .
+            "📦 {$request['item_name']}\n" .
+            "📝 {$request['item_description']}\n\n" .
+            'Tap *Accept* to lock the job — complete the quick step we send right after.';
 
         $this->whatsappService->sendButtonMessage(
             $driver['phone'],
@@ -94,7 +121,7 @@ class FindNearbyCouriersJob
     }
 
     /**
-     * Send template message with Quick Reply buttons (outside 24-hour window)
+     * Send template message with Quick Reply buttons (outside customer-care window)
      * 
      * NOTE: Template buttons are STATIC and pre-approved by Meta.
      * When driver clicks a button, it sends that button's payload as a text message.

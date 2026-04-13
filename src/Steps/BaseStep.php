@@ -18,7 +18,7 @@ abstract class BaseStep implements StepInterface
     protected $userModel;
     protected $deliveryRequestModel;
     protected $deliveryOfferModel;
-    protected string $validationError;
+    protected string $validationError = '';
     protected string $username = "";
 
     public function __construct(
@@ -52,6 +52,18 @@ abstract class BaseStep implements StepInterface
     public function getValidationError(): string
     {
         return $this->validationError;
+    }
+
+    /**
+     * After validateInput() fails: default is plain text; override in steps that use buttons/lists
+     * so users see the same choices again.
+     */
+    public function sendValidationFailureFeedback(string $phoneNumber): void
+    {
+        $err = trim($this->getValidationError());
+        if ($err !== '') {
+            $this->whatsappService->sendMessage($phoneNumber, $err);
+        }
     }
 
     public function getUsername(): string

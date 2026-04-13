@@ -6,7 +6,6 @@ use App\Services\WhatsAppService;
 use App\Models\Session;
 use App\Models\DeliveryRequest;
 
-use App\Steps\LanguageStep;
 use App\Steps\StartStep;
 use App\Steps\ChooseRoleStep;
 
@@ -50,13 +49,14 @@ use App\Steps\Driver\VehiclePictureStep;
 use App\Steps\Driver\LicensePictureStep;
 use App\Steps\Driver\InReviewStep;
 use App\Steps\Driver\RiderApprovedStep;
+use App\Steps\Logistics\ReviewPendingStep;
+use App\Steps\Logistics\LogisticsActiveJobStep;
 
 class StepRouter
 {
     private $steps = [
 
-        // onboarding
-        'language' => LanguageStep::class,
+        // onboarding (language step disabled — restore LanguageStep mapping when bringing it back)
         'start' => StartStep::class,
         'choose_role' => ChooseRoleStep::class,
         'sender_menu' => ShowMenuStep::class,
@@ -99,6 +99,12 @@ class StepRouter
 
         'summary' => ConfirmationStep::class,
         'rider_ready' => ReadyStep::class,
+
+        'logistics_review_rider' => ReviewPendingStep::class,
+        'logistics_review_customer' => ReviewPendingStep::class,
+
+        'awaiting_dropoff_pin' => LogisticsActiveJobStep::class,
+        'awaiting_location_share' => LogisticsActiveJobStep::class,
     ];
 
     private $sessionModel;

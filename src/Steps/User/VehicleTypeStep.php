@@ -2,6 +2,7 @@
 
 namespace App\Steps\User;
 
+use App\Services\DeliveryPricingService;
 use App\Steps\BaseStep;
 
 class VehicleTypeStep extends BaseStep
@@ -36,9 +37,11 @@ class VehicleTypeStep extends BaseStep
 
         $this->nextStep($phone, 'price_offer');
 
-        // Here, Sendra calculates/estimates a delivery price
-        //$estimatedPrice = $this->deliveryRequestModel->calculateEstimatedPrice($requestId);
-        $estimatedPrice = 3000; // Placeholder for demonstration
+        $row            = $this->deliveryRequestModel->findById($requestId) ?: [];
+        $pricing        = DeliveryPricingService::fromEnv();
+        $estimatedPrice = $pricing->estimateForDeliveryRequest($row, $this->driverModel);
+        $this->deliveryRequestModel->update($requestId, ['offered_price' => $estimatedPrice]);
+
         $this->whatsappService->sendButtonMessage(
             $phone,
             "Great! The estimated delivery price is ₦{$estimatedPrice}.
@@ -52,7 +55,25 @@ class VehicleTypeStep extends BaseStep
 
     public function validateInput(string $message): bool
     {
+        $choice  = strtolower(trim($message));
+        $mapping = ['motorcycle' => 'motorcycle', 'keke' => 'keke', '🏍️' => 'motorcycle', '🛺' => 'keke'];
 
-        return true;
+        return isset($mapping[$choice]);
+    }
+
+    public function sendValidationFailureFeedback(string $phoneNumber): void
+    {
+        $err = trim($this->getValidationError());
+        if ($err !== '') {
+            $this->whatsappService->sendMessage($phoneNumber, $err);
+        }
+        $this->whatsappService->sendButtonMessage(
+            $phoneNumber,
+            'Select the delivery vehicle type:',
+            [
+                'motorcycle' => '🏍️ Motorcycle',
+                'keke'       => '🛺 Keke',
+            ]
+        );
     }
 }

@@ -167,4 +167,10 @@ class DeliveryOffer
         return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
+    public function deleteByRequestId(int $requestId): void
+    {
+        $stmt = $this->db->prepare("DELETE FROM {$this->table} WHERE request_id = ?");
+        $stmt->execute([$requestId]);
+    }
+
 }
