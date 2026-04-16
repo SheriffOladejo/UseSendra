@@ -119,6 +119,66 @@ class LogisticsMessageController
             $deliveryOfferModel
         );
 
+        // ── Customer offer-selection escape hatch ─────────────────────────────
+        // When the customer was asked to accept/counter offers (customer_choose_offer),
+        // allow "hi/menu" (and explicit cancel words) to exit back to sender_menu.
+        if (($session['current_step'] ?? '') === 'customer_choose_offer') {
+            if (in_array($messageLower, ['hi', 'hello', 'hey', 'menu', 'status'], true)) {
+                $sessionModel->update($phoneNumber, [
+                    'pending_delivery_request' => null,
+                    'counter_request_id' => null,
+                ]);
+                $sessionModel->updateStep($phoneNumber, 'sender_menu');
+                $this->whatsappService->sendMessage($phoneNumber, "✅ Cancelled offer selection.\n\n" . (new \App\Steps\User\ShowMenuStep(
+                    $sessionModel,
+                    $this->whatsappService,
+                    $driverModel,
+                    $userModel,
+                    $deliveryRequestModel,
+                    $deliveryOfferModel
+                ))->handle($session, 'hi'));
+                return;
+            }
+            if (in_array($messageLower, ['cancel', 'cancel offer', 'reject', 'reject offer', 'stop'], true)) {
+                $sessionModel->update($phoneNumber, [
+                    'pending_delivery_request' => null,
+                    'counter_request_id' => null,
+                ]);
+                $sessionModel->updateStep($phoneNumber, 'sender_menu');
+                $this->whatsappService->sendMessage(
+                    $phoneNumber,
+                    "✅ Offer selection cancelled. Type *send* to start a new delivery, or *hi* for menu."
+                );
+                return;
+            }
+        }
+
+        // ── Rider counter step escape hatch ───────────────────────────────────
+        // If a rider got stuck in the "enter counter" step after a customer cancels/rejects,
+        // allow "hi/menu" to reset them back to rider_ready.
+        if (
+            ($session['current_step'] ?? '') === 'driver_enter_counter'
+            && in_array($messageLower, ['hi', 'hello', 'hey', 'menu', 'status'], true)
+        ) {
+            $d = $driverModel->findByPhone($phoneNumber);
+            if ($d) {
+                $sessionModel->update($phoneNumber, [
+                    'counter_request_id' => null,
+                    'pending_delivery_request' => null,
+                ]);
+                $sessionModel->updateStep($phoneNumber, 'rider_ready');
+
+                $ready = $router->getStepHandler('rider_ready');
+                $ready->setSession($sessionModel->findByPhone($phoneNumber) ?: $session);
+                $ready->setUsername($displayName);
+                $out = $ready->handle($session, $messageLower);
+                if ($out !== '') {
+                    $this->whatsappService->sendMessage($phoneNumber, $out);
+                }
+                return;
+            }
+        }
+
         // ── Image during pickup: decode QR server-side ─────────────────────────
         if ($imagePayload !== null) {
             $u = $userModel->findByPhone($phoneNumber);
@@ -132,9 +192,7 @@ class LogisticsMessageController
                     }
                     $tmp = $this->whatsappService->downloadMediaToFile($mediaId);
                     if (!$tmp) {
-                        $retry = PickupQrCodeService::pickupConfirmViaQrOnly()
-                            ? "📷 Couldn't load the photo. Please try again with a clear photo of the rider's Sendra QR."
-                            : "📷 Couldn't load the photo. Try again or type:\n" . PickupQrCodeService::payloadForRequest($rid);
+                        $retry = "📷 Couldn't load the photo. Please try again with a clear photo of the rider's Sendra QR.";
                         $this->whatsappService->sendMessage($phoneNumber, $retry);
                         return;
                     }
@@ -155,9 +213,7 @@ class LogisticsMessageController
                             return;
                         }
                     }
-                    $retry = PickupQrCodeService::pickupConfirmViaQrOnly()
-                        ? "📷 No Sendra QR found in that image. Send a clear, well-lit photo of the rider's Sendra QR."
-                        : "📷 No Sendra QR found. Use a clear photo of the rider's QR or type:\n" . PickupQrCodeService::payloadForRequest($rid);
+                    $retry = "📷 No Sendra QR found in that image. Send a clear, well-lit photo of the rider's Sendra QR.";
                     $this->whatsappService->sendMessage($phoneNumber, $retry);
                     return;
                 }
@@ -185,25 +241,7 @@ class LogisticsMessageController
             return;
         }
 
-        // ── Sender pickup: typed code (unsigned/dev only; signed mode = photo QR only) ──
-        if (preg_match('/^sendra_pickup_\d+(\.[a-z0-9_-]+)?$/i', $messageLower)) {
-            if (PickupQrCodeService::pickupConfirmViaQrOnly()) {
-                $this->whatsappService->sendMessage(
-                    $phoneNumber,
-                    "📷 To confirm pickup, send a *photo* of the rider's Sendra QR in this chat. Typing a code isn't supported."
-                );
-                return;
-            }
-            $this->handlePickupVerify(
-                $phoneNumber,
-                $messageLower,
-                $sessionModel,
-                $userModel,
-                $deliveryRequestModel,
-                $driverModel
-            );
-            return;
-        }
+        // Pickup confirmation is QR-photo only (no typed SENDRA_PICKUP_{id} support).
 
         // ── Customer blocks rider from future pings ───────────────────────────
         if (preg_match('/^block_rider_(\d+)$/', $messageLower, $m)) {
@@ -271,6 +309,23 @@ class LogisticsMessageController
         $driverRow = $driverModel->findByPhone($phoneNumber);
         if ($driverRow) {
             $openRiderJob = $deliveryRequestModel->findOpenAssignedJobForDriver((int) $driverRow['id']);
+            // Rider can update preferred bus-stop location when not on a job
+            if (
+                !$openRiderJob
+                && in_array($messageLower, ['location', 'update location', 'set location', 'bus stop', 'bus-stop', 'update bus stop'], true)
+            ) {
+                $sessionModel->updateStep($phoneNumber, 'rider_update_location');
+                $this->whatsappService->sendMessage(
+                    $phoneNumber,
+                    "📍 Please send your preferred bus-stop location so we can send delivery requests near you.\n\n"
+                    . "Use WhatsApp's location feature:\n"
+                    . "1. Tap the '➕' icon (iOS) or '📎' (Android)\n"
+                    . "2. Select 'Location'\n"
+                    . "3. Search on the map or send your current location.\n\n"
+                    . "No worries — you can change it anytime by typing *location*."
+                );
+                return;
+            }
             if ($openRiderJob && in_array($messageLower, ['hi', 'hello', 'hey', 'menu', 'status'], true)) {
                 $this->whatsappService->sendMessage(
                     $phoneNumber,
@@ -305,7 +360,7 @@ class LogisticsMessageController
                 }
             }
             if (($session['current_step'] ?? '') === 'awaiting_location_share') {
-                $coords = $this->parseCommaLatLng($rawTrim);
+                $coords = $this->parseWhatsAppLocationCoords($rawTrim);
                 if ($coords !== null) {
                     $this->handleRiderSharedLocationPin(
                         $phoneNumber,
@@ -324,7 +379,11 @@ class LogisticsMessageController
                     && !str_starts_with($messageLower, 'counter')) {
                     $this->whatsappService->sendMessage(
                         $phoneNumber,
-                        "📍 *Share your location*\nSend a *WhatsApp location pin* (+ → Location) or type *lat,lng* (e.g. *6.5244,3.3792*)."
+                        "📍 *Share your location*\n\n"
+                        . "Use WhatsApp's location feature:\n"
+                        . "1. Tap the '➕' icon (iOS) or the '📎' icon (Android)\n"
+                        . "2. Select 'Location'\n"
+                        . "3. Choose 'Send your current location' or pick a spot on the map"
                     );
                     return;
                 }
@@ -790,9 +849,7 @@ class LogisticsMessageController
         if ($parsedRequestId === null) {
             $this->whatsappService->sendMessage(
                 $phoneNumber,
-                PickupQrCodeService::pickupConfirmViaQrOnly()
-                    ? '⚠️ That QR could not be verified. Send a clear photo of the rider\'s Sendra QR.'
-                    : '⚠️ Invalid pickup code. Use the rider\'s QR or the code from your job message.'
+                '⚠️ That QR could not be verified. Send a clear photo of the rider\'s Sendra QR.'
             );
 
             return;
@@ -937,9 +994,7 @@ class LogisticsMessageController
         $phone  = $driver ? (string) ($driver['preferred_phone_number'] ?: $driver['phone']) : '';
 
         if (($job['status'] ?? '') === 'driver_assigned') {
-            $pickupLine = PickupQrCodeService::pickupConfirmViaQrOnly()
-                ? "At pickup, send a *photo* of the rider's Sendra QR in this chat to confirm them.\n\n"
-                : 'At pickup, confirm the rider with their QR or type:\n*' . PickupQrCodeService::payloadForRequest($id) . "*\n\n";
+            $pickupLine = "At pickup, send a *photo* of the rider's Sendra QR in this chat to confirm them.\n\n";
 
             return "📦 *Job #{$id}* — rider assigned, pickup next.\n\n"
                 . ($name !== '' ? "Rider: *{$name}*\n{$phone}\n\n" : '')
@@ -961,9 +1016,7 @@ class LogisticsMessageController
         $step = $session['current_step'] ?? '';
 
         if (($job['status'] ?? '') === 'driver_assigned') {
-            $pickupLine = PickupQrCodeService::pickupConfirmViaQrOnly()
-                ? "Go to pickup. The sender will *photograph your Sendra QR* in their chat to confirm you.\n\n"
-                : 'Go to pickup. The sender confirms you with your QR or by typing:\n*' . PickupQrCodeService::payloadForRequest($id) . "*\n\n";
+            $pickupLine = "Go to pickup. The sender will *photograph your Sendra QR* in their chat to confirm you.\n\n";
 
             return "🚚 *Job #{$id}* — you’re assigned.\n\n"
                 . $pickupLine
@@ -973,7 +1026,7 @@ class LogisticsMessageController
         if (($job['status'] ?? '') === 'in_transit') {
             if ($step === 'awaiting_location_share') {
                 return "🚚 *Job #{$id}* — customer asked for your *location*.\n\n"
-                    . 'Send a WhatsApp *location pin* or type *lat,lng*.';
+                    . "Please send a *WhatsApp location pin* using WhatsApp's Location feature.";
             }
 
             return "🚚 *Job #{$id}* — *in transit*.\n\n"
@@ -1010,7 +1063,10 @@ class LogisticsMessageController
         $this->whatsappService->sendMessage(
             $driver['phone'],
             "📍 *Location request* from the customer (job #{$jid}).\n\n"
-            . 'Send a *WhatsApp location pin* (+ → Location) or type coordinates:\n*lat,lng* (e.g. *6.5244,3.3792*)'
+            . "Use WhatsApp's location feature:\n"
+            . "1. Tap the '➕' icon (iOS) or the '📎' icon (Android)\n"
+            . "2. Select 'Location'\n"
+            . "3. Choose 'Send your current location'"
         );
     }
 
@@ -1080,6 +1136,52 @@ class LogisticsMessageController
         }
 
         return [$latF, $lngF];
+    }
+
+    /**
+     * Accepts WhatsApp location JSON payloads (from our webhook) and legacy "lat,lng" strings.
+     *
+     * @return array{0: float, 1: float}|null
+     */
+    private function parseWhatsAppLocationCoords(string $rawMessage): ?array
+    {
+        $rawMessage = trim($rawMessage);
+        if ($rawMessage === '') {
+            return null;
+        }
+
+        // New: webhook forwards location as JSON, e.g. {"location":{"latitude":..,"longitude":..}}
+        if ($rawMessage[0] === '{') {
+            $j = json_decode($rawMessage, true);
+            if (is_array($j)) {
+                $loc = $j['location'] ?? null;
+                if (is_array($loc)) {
+                    $lat = $loc['latitude'] ?? ($loc['lat'] ?? null);
+                    $lng = $loc['longitude'] ?? ($loc['lng'] ?? null);
+                    if (is_numeric($lat) && is_numeric($lng)) {
+                        $latF = (float) $lat;
+                        $lngF = (float) $lng;
+                        if ($latF >= -90 && $latF <= 90 && $lngF >= -180 && $lngF <= 180) {
+                            return [$latF, $lngF];
+                        }
+                    }
+                }
+
+                // Some providers might send top-level keys.
+                $latTop = $j['latitude'] ?? ($j['lat'] ?? null);
+                $lngTop = $j['longitude'] ?? ($j['lng'] ?? null);
+                if (is_numeric($latTop) && is_numeric($lngTop)) {
+                    $latF = (float) $latTop;
+                    $lngF = (float) $lngTop;
+                    if ($latF >= -90 && $latF <= 90 && $lngF >= -180 && $lngF <= 180) {
+                        return [$latF, $lngF];
+                    }
+                }
+            }
+        }
+
+        // Legacy fallback (accepted, but we no longer mention it in prompts)
+        return $this->parseCommaLatLng($rawMessage);
     }
 
     private function reconcileStuckSenderSession(
@@ -1577,9 +1679,7 @@ class LogisticsMessageController
             $this->whatsappService->sendImage(
                 $courier['phone'],
                 $abs,
-                PickupQrCodeService::pickupConfirmViaQrOnly()
-                    ? '🔐 Show this QR at pickup — the sender will photograph it in their chat to confirm you.'
-                    : '🔐 Show this QR at pickup (' . PickupQrCodeService::payloadForRequest($requestId) . ').'
+                '🔐 Show this QR at pickup — the sender will photograph it in their chat to confirm you.'
             );
         }
     }

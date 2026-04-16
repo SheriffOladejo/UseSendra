@@ -10,16 +10,20 @@ class CounterOfferStep extends BaseStep
     {
         $phone = $session['phone_number'];
 
-        if (!isset($session['counter_request_id'])) {
-            return "⚠️ Could not find the delivery request. Please try again.";
+        if (!isset($session['counter_request_id']) || (int) $session['counter_request_id'] < 1) {
+            $this->sessionModel->update($phone, ['counter_request_id' => null]);
+            $this->nextStep($phone, 'rider_ready');
+            return "⚠️ That counter-offer prompt is no longer active.\n\nSay *hi* to see the rider menu.";
         }
 
-        $requestId = $session['counter_request_id'];
+        $requestId = (int) $session['counter_request_id'];
         $requestModel = $this->deliveryRequestModel->findById($requestId);
         $driver = $this->driverModel->findByPhone($phone);
 
         if (!$requestModel || !$driver) {
-            return '⚠️ Request or rider profile missing. Try again from the job list.';
+            $this->sessionModel->update($phone, ['counter_request_id' => null]);
+            $this->nextStep($phone, 'rider_ready');
+            return '⚠️ Request or rider profile missing. You are back on standby — say *hi* anytime.';
         }
 
         $biddingUntil = $requestModel['bidding_expires_at'] ?? null;
@@ -42,15 +46,21 @@ class CounterOfferStep extends BaseStep
         }
 
         if (($requestModel['status'] ?? '') === 'awaiting_rebroadcast') {
-            return '⚠️ Customer is deciding on rebroadcast. Try again shortly.';
+            $this->sessionModel->update($phone, ['counter_request_id' => null]);
+            $this->nextStep($phone, 'rider_ready');
+            return '⚠️ This job is paused while the customer decides. You are back on standby — say *hi* anytime.';
         }
 
         if (in_array($requestModel['status'], ['driver_assigned', 'in_transit', 'delivered'])) {
-            return "⚠️ This delivery has already been taken.";
+            $this->sessionModel->update($phone, ['counter_request_id' => null]);
+            $this->nextStep($phone, 'rider_ready');
+            return "⚠️ This delivery has already been taken.\n\nYou are back on standby — say *hi* anytime.";
         }
 
         if (!$biddingUntil || time() > strtotime($biddingUntil)) {
-            return "⏱️ This offer has expired. You can no longer make a counteroffer.";
+            $this->sessionModel->update($phone, ['counter_request_id' => null]);
+            $this->nextStep($phone, 'rider_ready');
+            return "⏱️ This offer has expired. You can no longer make a counteroffer.\n\nSay *hi* to see the rider menu.";
         }
 
         $amount = floatval($message);
@@ -66,9 +76,11 @@ class CounterOfferStep extends BaseStep
             $amount
         );
 
-        $this->sessionModel->updateStep($phone, 'awaiting_rider_counter'); // optional
+        // Clear counter context and return rider to standby.
+        $this->sessionModel->update($phone, ['counter_request_id' => null]);
+        $this->nextStep($phone, 'rider_ready');
 
-        return "✅ Your counter offer of ₦{$amount} has been sent. The customer will review soon.";
+        return "✅ Your counter offer of ₦{$amount} has been sent. The customer will review soon.\n\nSay *hi* anytime for the rider menu.";
     }
 
     public function validateInput(string $message): bool
@@ -76,7 +88,7 @@ class CounterOfferStep extends BaseStep
         if (is_numeric($message) && (float) $message > 0) {
             return true;
         }
-        $this->validationError = '⚠️ Please enter a valid amount greater than 0 (numbers only).';
+        $this->validationError = '⚠️ Please enter a valid amount in ₦ (numbers only), or say *hi* to exit this counter step.';
 
         return false;
     }

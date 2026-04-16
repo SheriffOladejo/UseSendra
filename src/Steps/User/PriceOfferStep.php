@@ -17,12 +17,17 @@ class PriceOfferStep extends BaseStep
 
         $choice = trim($message);
 
-        // User accepts the estimated price
+        // User accepts the estimated price (button payload "yes")
         if (strtolower($choice) === 'yes') {
             $row = $this->deliveryRequestModel->findById($requestId);
             if ($row && (empty($row['offered_price']) || (float) $row['offered_price'] <= 0)) {
                 $est = DeliveryPricingService::fromEnv()->estimateForDeliveryRequest($row, $this->driverModel);
                 $this->deliveryRequestModel->update($requestId, ['offered_price' => $est]);
+            }
+
+            if ($this->isEditMode() && in_array($this->getEditTarget(), ['edit_price', 'edit_vehicle', 'edit_pickup_location', 'edit_dropoff_location'], true)) {
+                $this->finishEditAndShowSummary($phone, (int) $requestId);
+                return '';
             }
 
             $this->nextStep($phone, 'payer');
@@ -45,6 +50,11 @@ class PriceOfferStep extends BaseStep
             $this->deliveryRequestModel->update($requestId, [
                 'offered_price' => $numericPrice
             ]);
+
+            if ($this->isEditMode() && in_array($this->getEditTarget(), ['edit_price', 'edit_vehicle', 'edit_pickup_location', 'edit_dropoff_location'], true)) {
+                $this->finishEditAndShowSummary($phone, (int) $requestId);
+                return '';
+            }
 
             $this->nextStep($phone, 'payer');
 
@@ -94,12 +104,11 @@ class PriceOfferStep extends BaseStep
                 }
             }
         }
-        $priceKey = (string) (int) $estimatedPrice;
         $this->whatsappService->sendButtonMessage(
             $phoneNumber,
             "The estimated price is ₦{$estimatedPrice}.\n\nTap Yes to proceed or type your preferred price in numbers.",
             [
-                $priceKey => 'Yes, proceed',
+                'yes' => 'Yes, proceed',
             ]
         );
     }

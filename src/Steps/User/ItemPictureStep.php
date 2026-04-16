@@ -27,9 +27,29 @@ class ItemPictureStep extends BaseStep
             'item_photo_url' => $savedPath
         ]);
 
-        $this->nextStep($phone, 'sender_phone');
+        if ($this->isEditMode() && $this->getEditTarget() === 'edit_item_photo') {
+            $this->finishEditAndShowSummary($phone, (int) $requestId);
+            return '';
+        }
 
-        return "Item picture received.\n\nPlease enter the sender's phone number.";
+        $this->nextStep($phone, 'packing_checklist');
+
+        $this->whatsappService->sendButtonMessage(
+            $phone,
+            "Before we proceed, let’s quickly make sure your package is ready for delivery 👇\n\n"
+            . "📋 *Packing checklist* (takes 10 seconds)\n"
+            . "Please confirm:\n"
+            . "✅ Item is properly packed (box, bag, or envelope)\n"
+            . "✅ No prohibited items like drugs or high-value goods (> ₦100,000)\n"
+            . "✅ Package is safe to carry (fits bike/keke, under ~15kg)\n"
+            . "✅ You’ll hand it directly to the rider\n\n"
+            . "Are you good to go?",
+            [
+                'yes_continue' => 'Yes, continue',
+            ]
+        );
+
+        return '';
     }
 
     public function validateInput(string $message): bool

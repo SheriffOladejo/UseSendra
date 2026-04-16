@@ -113,7 +113,10 @@ final class DeliveryPricingService
         $vehicleMult = ($vehicleType === 'keke') ? $this->kekeMultiplier : 1.0;
         $raw         = $subtotal * $vehicleMult;
 
-        $rounded = (int) round($raw / $this->roundToNgn) * $this->roundToNgn;
+        // Temporary: round-trip pricing (out + back). Keep formula identical, just double.
+        $rawRoundTrip = $raw * 2;
+
+        $rounded = (int) round($rawRoundTrip / $this->roundToNgn) * $this->roundToNgn;
 
         return max($this->minNgn, min($this->maxNgn, $rounded));
     }

@@ -6,7 +6,7 @@ use App\Steps\BaseStep;
 
 class ItemDescriptionStep extends BaseStep
 {
-    protected string $validationError = "⚠️ Please enter a short description for your item.";
+    protected string $validationError = "⚠️ Please enter what you are sending (e.g. documents, small box).";
 
     public function handle(array $session, string $message): string
     {
@@ -17,13 +17,21 @@ class ItemDescriptionStep extends BaseStep
         $itemDescription = trim($message);
         if (!$itemDescription) return $this->validationError;
 
+        // Keep compatibility with existing schema: store the same short text as item_name + item_description.
+        $shortName = mb_substr($itemDescription, 0, 60);
         $this->deliveryRequestModel->update($requestId, [
+            'item_name' => $shortName,
             'item_description' => $itemDescription
         ]);
 
+        if ($this->isEditMode() && $this->getEditTarget() === 'edit_item_desc') {
+            $this->finishEditAndShowSummary($phone, (int) $requestId);
+            return '';
+        }
+
         $this->nextStep($phone, 'item_picture');
 
-        return "Perfect! Please send a clear picture of the item.";
+        return "Please send a clear picture of the item.";
     }
 
     public function validateInput(string $message): bool

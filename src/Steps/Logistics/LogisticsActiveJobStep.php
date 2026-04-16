@@ -25,7 +25,11 @@ class LogisticsActiveJobStep extends BaseStep
         if ($step === 'awaiting_location_share') {
             $this->whatsappService->sendMessage(
                 $phoneNumber,
-                "📍 *Location ping*\nSend a map pin (+ → Location) or type coordinates like:\n*6.5244,3.3792*"
+                "📍 *Share your location*\n\n"
+                . "Use WhatsApp's location feature:\n"
+                . "1. Tap the '➕' icon (iOS) or the '📎' icon (Android)\n"
+                . "2. Select 'Location'\n"
+                . "3. Choose 'Send your current location' or pick a spot on the map"
             );
 
             return;

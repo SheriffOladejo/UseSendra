@@ -21,6 +21,11 @@ class SenderPhoneStep extends BaseStep
             'sender_phone' => $senderPhone
         ]);
 
+        if ($this->isEditMode() && in_array($this->getEditTarget(), ['edit_sender_phone'], true)) {
+            $this->finishEditAndShowSummary($phone, (int) $requestId);
+            return '';
+        }
+
         $this->nextStep($phone, 'receiver_phone');
 
         return "Got it! Now, enter the receiver's phone number.";

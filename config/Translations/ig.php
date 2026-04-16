@@ -56,7 +56,7 @@ return [
     'invalid_phone' => "Biko tinye nọmba ekwentị ziri ezi.",
 
     // Location Steps
-    'location_not_found' => "📍 Enweghị m ike nweta ebe gị.\n\nBiko jiri atụmatụ kesaa ebe WhatsApp:\n1. Pịa akara '+'\n2. Họrọ 'Ebe'\n3. Họrọ 'Zipu ebe ugbu a' ma ọ bụ họrọ ebe na map\n\nNke a ga-enyere anyị izipu arịrịọ dị nso gị!",
+    'location_not_found' => "📍 Enweghị m ike nweta ebe gị.\n\nBiko jiri atụmatụ kesaa ebe WhatsApp:\n1. Pịa akara '➕' (iOS) ma ọ bụ '📎' (Android)\n2. Họrọ 'Ebe'\n3. Họrọ 'Zipu ebe ugbu a' ma ọ bụ họrọ ebe na map\n\nNke a ga-enyere anyị izipu arịrịọ dị nso gị!",
     'location_confirm_prompt' => "Ọ bụ ebe a ị chọrọ ka ọ bụrụ📍?",
     'location_confirm_button' => "Ọ bụrụ na ọ dị mma, pịa *Kwenye*. Ma ọ bụghị ya, zipu ebe ọhụrụ.",
     'location_invalid' => "📍 Anyị enweghị ike ịhụ ebe gị. Biko zitere ọnọdụ gị site na WhatsApp.",

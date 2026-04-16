@@ -56,7 +56,7 @@ return [
     'invalid_phone' => "Da fatan shigar da ingantaccen lambar waya.",
 
     // Location Steps
-    'location_not_found' => "📍 Ba za mu iya samun wurin ku ba.\n\nDa fatan za a yi amfani da fasalin rabawa wurin WhatsApp:\n1. Danna '+'\n2. Zaɓi 'Wuri'\n3. Zaɓi 'Aika wurin yanzu' ko zaɓi wuri a taswira\n\nWannan zai taimaka mana aika bukatun kusa da ku!",
+    'location_not_found' => "📍 Ba za mu iya samun wurin ku ba.\n\nDa fatan za a yi amfani da fasalin rabawa wurin WhatsApp:\n1. Danna '➕' (iOS) ko '📎' (Android)\n2. Zaɓi 'Wuri'\n3. Zaɓi 'Aika wurin yanzu' ko zaɓi wuri a taswira\n\nWannan zai taimaka mana aika bukatun kusa da ku!",
     'location_confirm_prompt' => "Shin wannan wurin da kuke so ne📍?",
     'location_confirm_button' => "Idan daidai ne, danna *Tabbatar*. In ba haka ba, aika sabon wuri.",
     'location_invalid' => "📍 Ba mu iya samun wurinka ba. Don Allah tura wurinka ta WhatsApp.",

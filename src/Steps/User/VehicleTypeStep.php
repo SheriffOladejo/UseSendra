@@ -16,14 +16,14 @@ class VehicleTypeStep extends BaseStep
         if (!$requestId) return "Delivery request not found.";
 
         $choice = strtolower(trim($message));
-        $mapping = ['motorcycle' => 'motorcycle', 'keke' => 'keke', '🏍️' => 'motorcycle', '🛺' => 'keke'];
+        $mapping = ['motorcycle' => 'motorcycle', 'keke' => 'keke', '🏍' => 'motorcycle', '🏍️' => 'motorcycle', '🛺' => 'keke'];
 
         if (!isset($mapping[$choice])) {
             $this->whatsappService->sendButtonMessage(
                 $phone,
                 "Select the delivery vehicle type:",
                 [
-                    'motorcycle' => "🏍️ Motorcycle",
+                    'motorcycle' => "🏍 Bike",
                     'keke' => "🛺 Keke"
                 ]
             );
@@ -47,7 +47,7 @@ class VehicleTypeStep extends BaseStep
             "Great! The estimated delivery price is ₦{$estimatedPrice}.
             \n\nClick yes to proceed or simply type your preferred price. e.g. 2500",
             [
-                $estimatedPrice => "Yes, proceed"
+                'yes' => "Yes, proceed"
             ]
         );
         return '';
@@ -56,7 +56,7 @@ class VehicleTypeStep extends BaseStep
     public function validateInput(string $message): bool
     {
         $choice  = strtolower(trim($message));
-        $mapping = ['motorcycle' => 'motorcycle', 'keke' => 'keke', '🏍️' => 'motorcycle', '🛺' => 'keke'];
+        $mapping = ['motorcycle' => 'motorcycle', 'keke' => 'keke', '🏍' => 'motorcycle', '🏍️' => 'motorcycle', '🛺' => 'keke'];
 
         return isset($mapping[$choice]);
     }
@@ -71,7 +71,7 @@ class VehicleTypeStep extends BaseStep
             $phoneNumber,
             'Select the delivery vehicle type:',
             [
-                'motorcycle' => '🏍️ Motorcycle',
+                'motorcycle' => '🏍 Bike',
                 'keke'       => '🛺 Keke',
             ]
         );

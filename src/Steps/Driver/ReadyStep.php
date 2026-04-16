@@ -15,15 +15,28 @@ class ReadyStep extends BaseStep
     public function handle(array $session, $message): string
     {
         $phone = $session['phone_number'];
+        $m = strtolower(trim((string) $message));
 
-        $this->whatsappService->sendMessage(
+        if (in_array($m, ['update_location', 'update location'], true)) {
+            $this->nextStep($phone, 'rider_update_location');
+            return "📍 Please share your preferred bus-stop location so we can send delivery requests near you.\n\n"
+                . "Use WhatsApp's location feature:\n"
+                . "1. Tap the '➕' icon (iOS) or the '📎' icon (Android)\n"
+                . "2. Select 'Location'\n"
+                . "3. Search on the map or send your current location.";
+        }
+
+        $this->whatsappService->sendButtonMessage(
             $phone,
             "🚚 *Sendra rider*\n\n"
             . "You’re online for nearby offers.\n\n"
             . "• Use *Accept* / *Counter* / *Decline* on each job\n"
             . "• After pickup, the sender confirms you; at dropoff type the receiver’s *4-digit code* (digits only)\n"
             . "• If a customer asks for your location, send a map pin when prompted\n\n"
-            . 'Say *hi* anytime for this reminder.'
+            . "Keep your bus-stop location updated as you move so you get nearby requests.",
+            [
+                'update_location' => '📍 Update location',
+            ]
         );
 
         return '';

@@ -238,10 +238,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 } elseif (isset($msg['interactive']['list_reply']['id'])) {
                     $messagePayload = trim(strtolower($msg['interactive']['list_reply']['id']));
                 } elseif ($msg['type'] === 'location') {
-                    $lat = $msg['location']['latitude'] ?? null;
-                    $lng = $msg['location']['longitude'] ?? null;
-                    $messagePayload = "$lat,$lng";
-                    error_log("Received location message: $messagePayload");
+                    $loc = $msg['location'] ?? [];
+                    $lat = $loc['latitude'] ?? null;
+                    $lng = $loc['longitude'] ?? null;
+                    $name = $loc['name'] ?? null;
+                    $address = $loc['address'] ?? null;
+
+                    // Preserve rich fields for later steps (drivers need a readable address).
+                    // Steps should still accept legacy "lat,lng" strings for compatibility.
+                    $messagePayload = json_encode([
+                        'location' => [
+                            'latitude'  => $lat,
+                            'longitude' => $lng,
+                            'name'      => $name,
+                            'address'   => $address,
+                        ],
+                    ]);
+                    error_log("Received location message: " . $messagePayload);
                 } elseif ($msg['type'] === 'image') {
                     // FIXED: Extract image data from the current $msg, not hardcoded array indices
                     $messagePayload = json_encode(['image' => $msg['image']]);

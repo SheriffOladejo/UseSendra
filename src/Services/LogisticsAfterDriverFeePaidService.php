@@ -100,10 +100,7 @@ final class LogisticsAfterDriverFeePaidService
         $request = $deliveryRequestModel->findById($requestId);
 
         $plate = $driver['vehicle_plate_number'] ?: ($driver['license_number'] ?? '—');
-        $pickupPayload = PickupQrCodeService::payloadForRequest($requestId);
-        $pickupConfirmLine = PickupQrCodeService::pickupConfirmViaQrOnly()
-            ? "At pickup: send a *photo* of the rider's Sendra QR in this chat to confirm they're the right person."
-            : "At pickup: photograph the rider's QR or type the code they show (e.g. {$pickupPayload}) to confirm they're the right person.";
+        $pickupConfirmLine = "At pickup: send a *photo* of the rider's Sendra QR in this chat to confirm they're the right person.";
         $customerMessage = "🎉 A rider is assigned to your job #{$requestId}.\n\n"
             . "Pickup: {$request['pickup_address']}\n"
             . "Dropoff: {$request['dropoff_address']}\n"
@@ -123,9 +120,7 @@ final class LogisticsAfterDriverFeePaidService
             $this->whatsappService->sendImage(
                 $driver['phone'],
                 $absQrPath,
-                PickupQrCodeService::pickupConfirmViaQrOnly()
-                    ? '🔐 Show this QR at pickup — the sender will photograph it in chat to confirm you.'
-                    : '🔐 Show this QR at pickup. Sender confirms by photo or typing: ' . PickupQrCodeService::payloadForRequest($requestId)
+                '🔐 Show this QR at pickup — the sender will photograph it in chat to confirm you.'
             );
         }
 

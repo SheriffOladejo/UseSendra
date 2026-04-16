@@ -3,6 +3,7 @@
 namespace App\Steps\User;
 
 use App\Steps\BaseStep;
+use App\Utils\DeliverySummaryFormatter;
 
 class PaymentMethodStep extends BaseStep
 {
@@ -26,23 +27,9 @@ class PaymentMethodStep extends BaseStep
         $this->nextStep($phone, 'summary');
 
         $request = $this->deliveryRequestModel->findById($requestId);
-
-        $summary = "Here’s your delivery summary:\n\n";
-        $summary .= "📦 Item: {$request['item_name']}\n";
-        $summary .= "📝 Description: {$request['item_description']}\n";
-        $summary .= "📍 Pickup Location:\n";
-        $summary .= "Address: {$request['pickup_address']}\n";
-        $summary .= "Notes: {$request['pickup_notes']}\n\n";
-        $summary .= "📍 Drop-off Location:\n";
-        $summary .= "Address: {$request['dropoff_address']}\n";
-        $summary .= "Notes: {$request['dropoff_notes']}\n\n";
-        $summary .= "📞 Sender: {$request['sender_phone']}\n";
-        $summary .= "📞 Receiver: {$request['receiver_phone']}\n";
-        $summary .= "🏍 Vehicle: {$request['vehicle_type']}\n";
-        $summary .= "💰 Price: ₦{$request['offered_price']}\n";
-        $summary .= "🧾 Payer: {$request['payer']}\n";
-        $summary .= "💳 Payment: {$request['payment_method']}\n\n";
-        $summary .= "Type 'edit' to modify or 'confirm' to proceed.";
+        $summary = is_array($request) && !empty($request)
+            ? DeliverySummaryFormatter::format($request)
+            : 'Please choose an option to proceed with your order:';
 
         $this->whatsappService->sendButtonMessage(
             $phone,
@@ -52,6 +39,11 @@ class PaymentMethodStep extends BaseStep
                 'edit' => "✏️ Edit"
             ]
         );
+
+        // If we came here from "edit", the summary is already re-sent; end edit mode.
+        if ($this->isEditMode()) {
+            $this->clearEditMode();
+        }
 
         return '';
     }

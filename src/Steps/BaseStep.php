@@ -8,6 +8,7 @@ use App\Models\LogisticsUser;
 use App\Models\DeliveryRequest;
 use App\Services\WhatsAppService;
 use App\Utils\Translator;   
+use App\Utils\DeliverySummaryFormatter;
 
 abstract class BaseStep implements StepInterface
 {
@@ -84,6 +85,109 @@ abstract class BaseStep implements StepInterface
 
         $translator = new Translator($lang);
         //$this->validationError = $translator->get('invalid_input');
+    }
+
+    /**
+     * Session data helpers (whatsapp_sessions.data JSON).
+     *
+     * We keep edit-mode flags here so we don't need new DB columns.
+     *
+     * @return array<string, mixed>
+     */
+    protected function getSessionData(): array
+    {
+        // Some DBs use whatsapp_sessions.data, others use whatsapp_sessions.session_data.
+        $raw = $this->session['data']
+            ?? ($this->session['session_data'] ?? '{}');
+        if (!is_string($raw) || trim($raw) === '') {
+            return [];
+        }
+        $j = json_decode($raw, true);
+        return is_array($j) ? $j : [];
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     */
+    protected function setSessionData(array $data): void
+    {
+        $phone = $this->session['phone_number'] ?? null;
+        if (!is_string($phone) || $phone === '') {
+            return;
+        }
+        $json = json_encode($data, JSON_UNESCAPED_UNICODE);
+        if ($json === false) {
+            $json = '{}';
+        }
+        // Write back to whichever column exists in the loaded session row.
+        if (array_key_exists('data', $this->session)) {
+            $this->sessionModel->update($phone, ['data' => $json]);
+            $this->session['data'] = $json;
+            return;
+        }
+        if (array_key_exists('session_data', $this->session)) {
+            $this->sessionModel->update($phone, ['session_data' => $json]);
+            $this->session['session_data'] = $json;
+            return;
+        }
+
+        // Fallback: attempt 'data' (Session::update() will fail gracefully if column missing).
+        $this->sessionModel->update($phone, ['data' => $json]);
+        $this->session['data'] = $json;
+    }
+
+    protected function setEditMode(string $target): void
+    {
+        $d = $this->getSessionData();
+        $d['edit'] = [
+            'active' => true,
+            'target' => $target,
+            'return_step' => 'summary',
+        ];
+        $this->setSessionData($d);
+    }
+
+    protected function isEditMode(): bool
+    {
+        $d = $this->getSessionData();
+        return !empty($d['edit']['active']);
+    }
+
+    protected function getEditTarget(): ?string
+    {
+        $d = $this->getSessionData();
+        $t = $d['edit']['target'] ?? null;
+        return is_string($t) && $t !== '' ? $t : null;
+    }
+
+    protected function clearEditMode(): void
+    {
+        $d = $this->getSessionData();
+        unset($d['edit']);
+        $this->setSessionData($d);
+    }
+
+    /**
+     * End edit mode and resend summary with Confirm/Edit buttons.
+     */
+    protected function finishEditAndShowSummary(string $phone, int $requestId): void
+    {
+        $this->clearEditMode();
+        $this->nextStep($phone, 'summary');
+
+        $req = $this->deliveryRequestModel->findById($requestId);
+        $body = is_array($req) && !empty($req)
+            ? DeliverySummaryFormatter::format($req)
+            : 'Please choose an option to proceed with your order:';
+
+        $this->whatsappService->sendButtonMessage(
+            $phone,
+            $body,
+            [
+                'confirm' => '✅ Confirm',
+                'edit'    => '✏️ Edit',
+            ]
+        );
     }
 
 }

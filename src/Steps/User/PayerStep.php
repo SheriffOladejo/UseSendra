@@ -31,6 +31,11 @@ class PayerStep extends BaseStep
             'payer' => $choice
         ]);
 
+        if ($this->isEditMode() && $this->getEditTarget() === 'edit_payer') {
+            $this->finishEditAndShowSummary($phone, (int) $requestId);
+            return '';
+        }
+
         $this->nextStep($phone, 'payment_method');
 
         $this->whatsappService->sendButtonMessage(

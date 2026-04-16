@@ -56,7 +56,7 @@ return [
     'invalid_phone' => "Jọwọ tẹ nọmba foonu to pe.",
 
     // Location Steps
-    'location_not_found' => "📍 A ko le gba ipo rẹ.\n\nJọwọ lo ẹya pin ipo WhatsApp:\n1. Tẹ aami '+'\n2. Yan 'Ipo'\n3. Yan 'Fi ipo lọwọlọwọ ranṣẹ' tabi yan ipo kan lori maapu\n\nEyi yoo ran wa lọwọ lati firanṣẹ awọn ibeere to sunmọ rẹ!",
+    'location_not_found' => "📍 A ko le gba ipo rẹ.\n\nJọwọ lo ẹya pin ipo WhatsApp:\n1. Tẹ aami '➕' (iOS) tabi '📎' (Android)\n2. Yan 'Ipo'\n3. Yan 'Fi ipo lọwọlọwọ ranṣẹ' tabi yan ipo kan lori maapu\n\nEyi yoo ran wa lọwọ lati firanṣẹ awọn ibeere to sunmọ rẹ!",
     'location_confirm_prompt' => "Ṣe eyi ni ipo ibudo ti o fẹ📍?",
     'location_confirm_button' => "Ti o ba tọ, tẹ *Fọwọsi*. Bibẹẹkọ, fi ipo tuntun ranṣẹ.",
     'location_invalid' => "📍 A kò rí ibi rẹ. Jọwọ fi ipo rẹ ranṣẹ nipasẹ WhatsApp.",
