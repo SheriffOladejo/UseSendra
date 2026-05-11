@@ -1,6 +1,7 @@
 // src/index.ts
 import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
+import { smoothSendNetwork } from './config/aptosAssets.js';
 import { accountRoutes } from './routes/accounts.js';
 import { transactionRoutes } from './routes/transactions.js';
 
@@ -41,6 +42,7 @@ const HOST = process.env.NODE_ENV === 'production' ? '127.0.0.1' : '0.0.0.0';
 
 app.listen(PORT, HOST, () => {
   console.log(`\n🚀 Aptos service running on http://${HOST}:${PORT}`);
-  console.log(`📡 Network: ${process.env.APTOS_NETWORK || 'TESTNET'}`);
+  console.log(`📡 Aptos SDK network: ${process.env.APTOS_NETWORK || 'TESTNET'}`);
+  console.log(`📡 SmoothSend network: ${smoothSendNetwork()}`);
   console.log(`🔒 Auth:    X-Internal-Secret header required on all routes\n`);
 });

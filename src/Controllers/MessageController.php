@@ -73,6 +73,10 @@ class MessageController
             if (preg_match('/^\d{6}$/', $message)) {
                 return $this->handlePinConfirmation($from, $message, $user);
             }
+            // Support the Cancel button payload (`cancel_<id>`) while in pending state.
+            if (str_starts_with($messageLower, 'cancel_')) {
+                return $this->handleCancelTransaction($from, substr($message, 7));
+            }
             if (strtolower(trim($message)) === 'cancel') {
                 return $this->handleCancelTransaction($from, $user['pending_tx_id']);
             }
@@ -83,6 +87,12 @@ class MessageController
                     "Enter your *6-digit PIN* to confirm, or type *cancel* to abort."
             );
             return ['success' => false, 'reason' => 'awaiting_pin_confirmation'];
+        }
+
+        // ── 3b. Sell (off-ramp) multi-step — before generic commands ───────────
+        $sellHandled = $this->handleSellFlowMessage($from, $message, $messageLower, $user);
+        if ($sellHandled !== null) {
+            return $sellHandled;
         }
 
         // ── 4. Button / command routing ───────────────────────────────────────
@@ -102,8 +112,7 @@ class MessageController
             case str_starts_with($messageLower, '/send'):
                 return $this->handleSendCommand($from);
 
-            case str_starts_with($messageLower, 'send '):
-                return $this->handleSendInitiation($from, $messageLower, $user);
+                // `send …` is handled below with *sell* / *pay* so Naira bank lines hit cash-out, not P2P send.
 
                 // Other commands
             case $messageLower === '/balance':
@@ -124,6 +133,14 @@ class MessageController
 
             case $this->isGreeting($messageLower):
                 return $this->handleGreeting($from, $user);
+
+            case $messageLower === 'sell':
+            case str_starts_with($messageLower, 'sell '):
+            case $messageLower === 'sell_fiat_ngn':
+            case $messageLower === 'sell_fiat_ghs':
+            case str_starts_with($messageLower, 'send '):
+            case str_starts_with($messageLower, 'pay '):
+                return $this->handleSellEntry($from, $message, $messageLower, $user);
 
             default:
                 return $this->handleUnknownCommand($from);
@@ -178,10 +195,7 @@ class MessageController
         curl_setopt_array($ch, [
             CURLOPT_POST           => true,
             CURLOPT_POSTFIELDS     => json_encode(['phone_number' => $from]),
-            CURLOPT_HTTPHEADER     => [
-                'Content-Type: application/json',
-                'X-Internal-Secret: ' . $_ENV['INTERNAL_API_SECRET'],
-            ],
+            CURLOPT_HTTPHEADER     => $this->aptosServiceAuthHeaders(),
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_TIMEOUT        => 15,
         ]);
@@ -403,39 +417,66 @@ class MessageController
             return ['success' => false, 'reason' => 'no_private_key'];
         }
 
+        if (($pending['tx_type'] ?? '') === 'offramp_oneclick_centiiv') {
+            return $this->executeCentiivOneClickOfframpTransfer($from, $user, $pending);
+        }
+
+        if (($pending['tx_type'] ?? '') === 'offramp_centiiv') {
+            return $this->executeCentiivOfframpTransfer($from, $user, $pending);
+        }
+
         $this->whatsappService->sendMessage($from, "⏳ Processing your transaction...");
 
-        // ── Call Node.js to execute ───────────────────────────────────────────
-        $ch = curl_init('http://127.0.0.1:3001/transactions/execute');
-        curl_setopt_array($ch, [
-            CURLOPT_POST           => true,
-            CURLOPT_POSTFIELDS     => json_encode([
+        // Hardcoded: always use SmoothSend Method 2 (TransactionSubmitter) for sends.
+        // This prevents accidental fallback to the SmoothSend Script (Method 1) path.
+        $useMethod2Gasless = false;
+
+        if ($useMethod2Gasless) {
+            $result = $this->aptosServiceExecuteGasless([
                 'sender_address'        => $user['aptos_address'],
                 'encrypted_private_key' => $user['encrypted_private_key'],
+                'function'              => '0x1::aptos_account::transfer_fungible_assets',
+                // Shortcut supported by aptos-service: builds
+                // 0x1::aptos_account::transfer_fungible_assets(metadata, recipient, rawAmount)
                 'recipient'             => $pending['recipient_address'],
                 'amount'                => $pending['amount'],
                 'currency'              => $pending['currency'],
-            ]),
-            CURLOPT_HTTPHEADER     => [
-                'Content-Type: application/json',
-                'X-Internal-Secret: ' . $_ENV['INTERNAL_API_SECRET'],
-            ],
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT        => 30,
-        ]);
-        $curlError = null;
-        $rawResponse = curl_exec($ch);
-        if (curl_errno($ch)) {
-            $curlError = curl_error($ch);
-            error_log("aptos-service execute curl error: $curlError");
+            ]);
+            $curlError = null;
+            $rawResponse = isset($result['raw']) ? (string) $result['raw'] : json_encode($result);
+            error_log('[send] aptos-service execute-gasless used. submit_mode=' . (string) ($result['submit_mode'] ?? '') . ' function=' . (string) ($result['function'] ?? ''));
+        } else {
+            // ── Call Node.js to execute (existing path) ────────────────────────
+            $ch = curl_init('http://127.0.0.1:3001/transactions/execute');
+            curl_setopt_array($ch, [
+                CURLOPT_POST           => true,
+                CURLOPT_POSTFIELDS     => json_encode([
+                    'sender_address'        => $user['aptos_address'],
+                    'encrypted_private_key' => $user['encrypted_private_key'],
+                    'recipient'             => $pending['recipient_address'],
+                    'amount'                => $pending['amount'],
+                    'currency'              => $pending['currency'],
+                ]),
+                CURLOPT_HTTPHEADER     => $this->aptosServiceAuthHeaders(),
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_TIMEOUT        => 30,
+            ]);
+            $curlError = null;
+            $rawResponse = curl_exec($ch);
+            if (curl_errno($ch)) {
+                $curlError = curl_error($ch);
+                error_log("aptos-service execute curl error: $curlError");
+            }
+            curl_close($ch);
+            $result = json_decode($rawResponse, true);
+            error_log('[send] aptos-service execute used. transfer_mode=' . (string) ($result['transfer_mode'] ?? '') . ' force_smoothsend=' . (string) ($result['force_smoothsend'] ?? ''));
         }
-        curl_close($ch);
-        $result = json_decode($rawResponse, true);
 
         $this->userModel->clearPendingTransaction($from);
 
         if (!empty($result['success'])) {
-            $hash = $result['tx_hash'];
+            $hash = (string) $result['tx_hash'];
+            $explorerUrl = $this->aptosExplorerUrlForTransaction(is_array($result) ? $result : [], $hash);
             $this->updatePendingTransactionStatus($pending['id'], 'confirmed', $hash);
             $this->recordTransaction([
                 'user_phone'    => $from,
@@ -446,14 +487,14 @@ class MessageController
                 'aptos_address' => $user['aptos_address'],
                 'counterparty'  => $pending['recipient_address'],
                 'tx_hash'       => $hash,
-                'explorer_url'  => "https://explorer.aptoslabs.com/txn/{$hash}?network=testnet",
+                'explorer_url'  => $explorerUrl,
             ]);
             $this->whatsappService->sendMessage(
                 $from,
                 "✅ *Transaction Confirmed!*\n\n" .
                     "Sent: *{$pending['amount']} {$pending['currency']}*\n" .
                     "To: `{$pending['recipient_address']}`\n\n" .
-                    "🔗 https://explorer.aptoslabs.com/txn/{$hash}?network=testnet"
+                    "🔗 {$explorerUrl}"
             );
         } else {
             $this->updatePendingTransactionStatus($pending['id'], 'failed');
@@ -629,7 +670,7 @@ class MessageController
                 "Send: *{$amount} {$currency}*\n" .
                 "To: {$displayRecipient}\n\n" .
                 "Enter your *6-digit PIN* to confirm:",
-            ['cancel_' . $pendingId => '❌ Cancel']
+            ['cancel_' . $pendingId => 'Cancel']
         );
 
         return ['success' => true, 'pending_id' => $pendingId];
@@ -642,6 +683,7 @@ class MessageController
     {
         $this->updatePendingTransactionStatus($pendingTxId, 'cancelled');
         $this->userModel->clearPendingTransaction($from);
+        $this->clearSellChatContext($from);
 
         $this->whatsappService->sendMessage(
             $from,
@@ -689,62 +731,43 @@ class MessageController
         return ['success' => true, 'action' => 'balance'];
     }
 
+    /**
+     * Balances from aptos-service (same APTOS_NETWORK and USDC/USDT metadata as chain sends).
+     * Avoids the old hardcoded testnet fullnode + testnet token addresses in PHP.
+     */
     private function fetchAptosBalance($walletAddress)
     {
-        $USDC = "0x69091fbab5f7d635ee7ac5098cf0c1efbe31d68fec0f2cd565e8d168daf52832";
-        $USDT = "0x5724aca06f8bd505e9eaf2337d16d6fc310c96ecfd331269bf2f76840d3f355a";
-        $baseUrl = "https://api.testnet.aptoslabs.com/v1";
+        $ch = curl_init('http://127.0.0.1:3001/accounts/balance');
+        curl_setopt_array($ch, [
+            CURLOPT_POST => true,
+            CURLOPT_POSTFIELDS => json_encode(['aptos_address' => $walletAddress]),
+            CURLOPT_HTTPHEADER => $this->aptosServiceAuthHeaders(),
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT => 20,
+        ]);
+        $raw = curl_exec($ch);
+        $http = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        if (curl_errno($ch)) {
+            error_log('fetchAptosBalance curl: ' . curl_error($ch));
+        }
+        curl_close($ch);
 
-        try {
-            return [
-                'APT'  => number_format($this->getAptBalance($walletAddress, $baseUrl) / 1e8, 4),
-                'USDC' => number_format($this->getFungibleAssetBalance($walletAddress, $USDC, $baseUrl) / 1e6, 2),
-                'USDT' => number_format($this->getFungibleAssetBalance($walletAddress, $USDT, $baseUrl) / 1e6, 2),
-            ];
-        } catch (\Exception $e) {
-            error_log("fetchAptosBalance error: " . $e->getMessage());
+        if (!is_string($raw) || $http < 200 || $http >= 300) {
+            error_log("fetchAptosBalance: aptos-service /accounts/balance HTTP {$http} " . substr((string) $raw, 0, 300));
+
             return null;
         }
-    }
-
-    private function getAptBalance($walletAddress, $baseUrl)
-    {
-        $url = "$baseUrl/accounts/$walletAddress/resource/0x1::coin::CoinStore<0x1::aptos_coin::AptosCoin>";
-        $ch  = curl_init($url);
-        curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_HTTPHEADER => ['Content-Type: application/json']]);
-        $response = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
-
-        if ($httpCode === 200) {
-            $data = json_decode($response, true);
-            return (int) ($data['data']['coin']['value'] ?? 0);
+        $j = json_decode($raw, true);
+        if (!is_array($j) || empty($j['success']) || !isset($j['balances']) || !is_array($j['balances'])) {
+            return null;
         }
-        return 0;
-    }
+        $b = $j['balances'];
 
-    private function getFungibleAssetBalance($walletAddress, $metadataAddress, $baseUrl)
-    {
-        $ch = curl_init("$baseUrl/view");
-        curl_setopt_array($ch, [
-            CURLOPT_POST           => true,
-            CURLOPT_POSTFIELDS     => json_encode([
-                "function"        => "0x1::primary_fungible_store::balance",
-                "type_arguments"  => ["0x1::fungible_asset::Metadata"],
-                "arguments"       => [$walletAddress, $metadataAddress],
-            ]),
-            CURLOPT_HTTPHEADER     => ['Content-Type: application/json', 'Accept: application/json'],
-            CURLOPT_RETURNTRANSFER => true,
-        ]);
-        $response = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
-
-        if ($httpCode === 200) {
-            $data = json_decode($response, true);
-            return isset($data[0]) ? (int) $data[0] : 0;
-        }
-        return 0;
+        return [
+            'APT' => number_format((float) ($b['APT'] ?? 0), 4),
+            'USDC' => number_format((float) ($b['USDC'] ?? 0), 2),
+            'USDT' => number_format((float) ($b['USDT'] ?? 0), 2),
+        ];
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -816,6 +839,66 @@ class MessageController
         $stmt->execute(['status' => $status, 'tx_hash' => $txHash, 'id' => $id]);
     }
 
+    /**
+     * Merge JSON stored in pending_transactions.human_description (off-ramp meta).
+     *
+     * @param array<string, mixed> $patch
+     */
+    private function mergePendingTransactionHumanDescription(string $id, array $patch): void
+    {
+        if (!$this->db) {
+            return;
+        }
+        $stmt = $this->db->prepare('SELECT human_description FROM pending_transactions WHERE id = ? LIMIT 1');
+        $stmt->execute([$id]);
+        $row = $stmt->fetch(\PDO::FETCH_ASSOC);
+        if (!$row) {
+            return;
+        }
+        $meta = json_decode((string) ($row['human_description'] ?? ''), true);
+        if (!is_array($meta)) {
+            $meta = [];
+        }
+        $meta = array_merge($meta, $patch);
+        $u = $this->db->prepare('UPDATE pending_transactions SET human_description = ? WHERE id = ?');
+        $u->execute([json_encode($meta, JSON_UNESCAPED_UNICODE), $id]);
+    }
+
+    private function oneclickCentiivRampConfigured(): bool
+    {
+        $enabled = strtolower(trim((string) ($_ENV['SENDRA_ONECLICK_RAMP_ENABLED'] ?? getenv('SENDRA_ONECLICK_RAMP_ENABLED') ?: '1')));
+        if ($enabled === '0' || $enabled === 'false' || $enabled === 'off') {
+            return false;
+        }
+        $g = trim((string) ($_ENV['SENDRA_CENTIIV_STELLAR_USDC_DEPOSIT'] ?? getenv('SENDRA_CENTIIV_STELLAR_USDC_DEPOSIT') ?: ''));
+        if ($g === '' || strlen($g) < 5 || $g[0] !== 'G') {
+            return false;
+        }
+        $oc = new \App\Services\SendraOneClickService();
+
+        return $oc->isConfigured();
+    }
+
+    /**
+     * Block sell entry when ramp health cache (cron_ramp_health.php) reports outages.
+     *
+     * @return ?array<string, mixed> non-null = flow should stop (message already sent)
+     */
+    private function sellRampHealthGateIfDown($from): ?array
+    {
+        $centiiv = new \App\Services\SendraCentiivRampService();
+        if (!$centiiv->isConfigured()) {
+            return null;
+        }
+        $gate = \App\Services\SendraRampHealthService::evaluateSellGate(true, $this->oneclickCentiivRampConfigured());
+        if (empty($gate['block'])) {
+            return null;
+        }
+        $this->whatsappService->sendMessage($from, (string) ($gate['message'] ?? '⚠️ Cash-out is temporarily unavailable. Try again soon.'));
+
+        return ['success' => false, 'action' => 'ramp_health_blocked'];
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // HELPERS
     // ─────────────────────────────────────────────────────────────────────────
@@ -836,6 +919,7 @@ class MessageController
 
     private function handleGreeting($from, $user)
     {
+        $this->clearSellChatContext($from);
         $name = $user['username'] ?? 'there';
 
         $message = '';
@@ -847,6 +931,7 @@ class MessageController
             $message = "Hi {$name} 🙋🏽‍♀️ I'm Sendra.\n\n" .
                 "*Main Menu*\n" .
                 "💰 Check balance — type `/balance`\n" .
+                "📈 Sell crypto for Naira — type `sell` or `sell 20 USDC`\n" .
                 "📤 Send USDT/USDC — type `send 50 USDT to 0x...`\n" .
                 "📥 Receive funds — type `/receive`\n" .
                 "❓ Help — type `/help`";
@@ -1094,10 +1179,7 @@ class MessageController
             curl_setopt_array($ch, [
                 CURLOPT_POST           => true,
                 CURLOPT_POSTFIELDS     => json_encode(['phone_number' => $recipientPhone]),
-                CURLOPT_HTTPHEADER     => [
-                    'Content-Type: application/json',
-                    'X-Internal-Secret: ' . $_ENV['INTERNAL_API_SECRET'],
-                ],
+                CURLOPT_HTTPHEADER     => $this->aptosServiceAuthHeaders(),
                 CURLOPT_RETURNTRANSFER => true,
                 CURLOPT_TIMEOUT        => 15,
             ]);
@@ -1151,10 +1233,7 @@ class MessageController
                 'amount'               => $voucher['amount'],
                 'currency'             => $voucher['currency'],
             ]),
-            CURLOPT_HTTPHEADER     => [
-                'Content-Type: application/json',
-                'X-Internal-Secret: ' . $_ENV['INTERNAL_API_SECRET'],
-            ],
+            CURLOPT_HTTPHEADER     => $this->aptosServiceAuthHeaders(),
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_TIMEOUT        => 30,
         ]);
@@ -1162,7 +1241,8 @@ class MessageController
         curl_close($ch);
 
         if (!empty($result['success'])) {
-            $hash = $result['tx_hash'];
+            $hash = (string) $result['tx_hash'];
+            $explorerUrl = $this->aptosExplorerUrlForTransaction(is_array($result) ? $result : [], $hash);
 
             // Save tx_hash on voucher
             $this->db->prepare("UPDATE vouchers SET tx_hash = ? WHERE id = ?")
@@ -1178,7 +1258,7 @@ class MessageController
                 'aptos_address' => $sender['aptos_address'],
                 'counterparty'  => $recipientAddress,
                 'tx_hash'       => $hash,
-                'explorer_url'  => "https://explorer.aptoslabs.com/txn/{$hash}?network=testnet",
+                'explorer_url'  => $explorerUrl,
             ]);
             $this->recordTransaction([
                 'user_phone'    => $recipientPhone,
@@ -1189,7 +1269,7 @@ class MessageController
                 'aptos_address' => $recipientAddress,
                 'counterparty'  => $sender['aptos_address'],
                 'tx_hash'       => $hash,
-                'explorer_url'  => "https://explorer.aptoslabs.com/txn/{$hash}?network=testnet",
+                'explorer_url'  => $explorerUrl,
             ]);
 
             // Get names for personalised messages
@@ -1203,7 +1283,7 @@ class MessageController
                 "✅ *Voucher Claimed!*\n\n" .
                     "*{$recipientName}* signed up and received your " .
                     "*{$voucher['amount']} {$voucher['currency']}*.\n\n" .
-                    "🔗 https://explorer.aptoslabs.com/txn/{$hash}?network=testnet"
+                    "🔗 {$explorerUrl}"
             );
 
             // Notify recipient — mention sender by name
@@ -1230,150 +1310,1949 @@ class MessageController
         }
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // SELL (crypto → NGN bank payout)
+    // ─────────────────────────────────────────────────────────────────────────
 
     /**
-     * Parse offramp command: "send 20000 naira to 8164727987 opay"
+     * @return ?array<string, mixed> non-null = handled (consume message)
      */
-    private function handleOfframpCommand($from, $message, $user)
+    private function handleSellFlowMessage($from, $message, $messageLower, $user)
     {
-        // Parse: send [amount] naira to [account_number] [bank_code/name]
-        if (!preg_match('/send\s+(\d+(?:\.\d{2})?)\s+naira\s+to\s+(\d{10})\s+(\w+)/i', $message, $matches)) {
-            $this->whatsappService->sendMessage(
-                $from,
-                "⚠️ Format: *send [amount] naira to [account] [bank]*\n\n" .
-                "Example: `send 20000 naira to 8164727987 opay`\n\n" .
-                "Supported banks: opay, kuda, gtb, access, zenith, etc."
-            );
-            return ['success' => false];
+        $userRow = $this->userModel->findByPhone($from) ?: $user;
+        $ctx = $this->getSellChatContext($userRow);
+        if ($ctx === null) {
+            return null;
         }
 
-        $amountNaira = $matches[1];
-        $accountNumber = $matches[2];
-        $bankIdentifier = strtolower($matches[3]);
+        if ($messageLower === 'cancel') {
+            $this->clearSellChatContext($from);
+            $this->whatsappService->sendMessage($from, "Cancelled. Type *menu* for options.");
 
-        // Map bank names to codes (you'll need a complete mapping)
-        $bankCodes = [
-            'opay' => '999992',
-            'kuda' => '090267',
-            'gtb' => '058',
-            'access' => '044',
-            'zenith' => '057',
-            // Add more banks
-        ];
-
-        $bankCode = $bankCodes[$bankIdentifier] ?? null;
-
-        if (!$bankCode) {
-            $this->whatsappService->sendMessage(
-                $from,
-                "❌ Unknown bank: *{$bankIdentifier}*\n\n" .
-                "Supported: opay, kuda, gtb, access, zenith"
-            );
-            return ['success' => false];
+            return ['success' => true, 'action' => 'sell_cancelled'];
         }
 
-        return $this->processOfframpRequest($from, $user, $amountNaira, $accountNumber, $bankCode);
+        if ($messageLower === 'menu' || $messageLower === '/menu') {
+            $this->clearSellChatContext($from);
+
+            return $this->handleGreeting($from, $this->userModel->findByPhone($from) ?: $userRow);
+        }
+
+        $agg = new \App\Services\SendraCentiivRampService();
+        if (!$agg->isConfigured()) {
+            $this->clearSellChatContext($from);
+            $this->whatsappService->sendMessage($from, "❌ Sell is temporarily unavailable. Please try again later.");
+
+            return ['success' => false, 'action' => 'sell_unconfigured'];
+        }
+
+        $healthBlock = $this->sellRampHealthGateIfDown($from);
+        if ($healthBlock !== null) {
+            return $healthBlock;
+        }
+
+        $step = $ctx['step'] ?? '';
+
+        if ($step === 'await_send_naira_asset') {
+            $asset = null;
+            if ($messageLower === 'sell_pick_usdt' || $messageLower === 'usdt') {
+                $asset = 'USDT';
+            } elseif ($messageLower === 'sell_pick_usdc' || $messageLower === 'usdc') {
+                $asset = 'USDC';
+            }
+            if ($asset !== null) {
+                // Avoid duplicate webhook / button taps double-processing.
+                $ctx['step'] = 'await_send_naira_processing';
+                $ctx['asset'] = $asset;
+                $this->setSellChatContext($from, $ctx);
+
+                $this->whatsappService->sendMessage($from, '⏳ Getting the best rate…');
+
+                return $this->sellSendNairaAfterAssetPick($from, $userRow, $ctx, $asset, $agg);
+            }
+            $this->whatsappService->sendMessage($from, "Tap *USDT* or *USDC*, or type *USDT* / *USDC*.\n*cancel* stops.");
+
+            return ['success' => false, 'action' => 'sell_send_naira_asset_reprompt'];
+        }
+
+        if ($step === 'await_send_naira_processing') {
+            $this->whatsappService->sendMessage($from, '⏳ Working on it…');
+
+            return ['success' => false, 'action' => 'sell_send_naira_processing'];
+        }
+
+        if ($step === 'await_amount') {
+            if (preg_match('/^(\d+(?:\.\d+)?)\s*(usdc|usdt)\s*$/i', trim($message), $m)) {
+                return $this->sellApplyQuoteAndPrompt(
+                    $from,
+                    $this->userModel->findByPhone($from) ?: $userRow,
+                    (string) $m[1],
+                    strtoupper($m[2]),
+                    (string) ($ctx['fiat'] ?? 'NGN'),
+                    $agg
+                );
+            }
+            $this->whatsappService->sendMessage(
+                $from,
+                "Reply with amount and token, e.g. *20 USDC* or *10 USDT*.\nType *cancel* to stop."
+            );
+
+            return ['success' => false, 'action' => 'sell_prompt_amount'];
+        }
+
+        if ($step === 'await_quote_confirm') {
+            if ($this->sellMessageMeansYes($message, $messageLower, 'sell_quote_yes')) {
+                $ctx['step'] = 'await_bank';
+                $this->setSellChatContext($from, $ctx);
+                $this->whatsappService->sendMessage(
+                    $from,
+                    "🏦 *Bank payout*\nReply in this format:\n`0123456789 BankName`\nExample: `0123456789 GTBank`\n\nType *cancel* to stop."
+                );
+
+                return ['success' => true, 'action' => 'sell_bank_prompt'];
+            }
+            if ($messageLower === 'sell_quote_change') {
+                $fiat = (string) ($ctx['fiat'] ?? 'NGN');
+                $this->setSellChatContext($from, ['flow' => 'sell', 'step' => 'await_amount', 'fiat' => $fiat]);
+                $this->whatsappService->sendMessage($from, "Okay. How much do you want to sell? (e.g. *20 USDC*)");
+
+                return ['success' => true, 'action' => 'sell_change_amount'];
+            }
+            $this->whatsappService->sendMessage(
+                $from,
+                "Reply *yes* to continue or tap *Different amount*.\nType *cancel* to stop."
+            );
+
+            return ['success' => false, 'action' => 'sell_quote_reprompt'];
+        }
+
+        if ($step === 'await_bank') {
+            if (preg_match('/^(\d{10})\s+(.+)$/u', trim($message), $m)) {
+                return $this->sellResolveBankAndConfirmPayee($from, $userRow, $ctx, $m[1], trim($m[2]), $agg, false);
+            }
+            $this->whatsappService->sendMessage(
+                $from,
+                "Use: `0123456789 BankName` (10-digit NGN account).\nType *cancel* to stop."
+            );
+
+            return ['success' => false, 'action' => 'sell_bank_format'];
+        }
+
+        // (no await_payee_confirm: we go straight to PIN after bank verification)
+
+        $this->clearSellChatContext($from);
+
+        return null;
+    }
+
+    private function handleSellEntry($from, $message, $messageLower, $user)
+    {
+        if (!$this->sellPrerequisitesOk($from, $user)) {
+            return ['success' => false, 'action' => 'sell_blocked'];
+        }
+
+        $agg = new \App\Services\SendraCentiivRampService();
+        if (!$agg->isConfigured()) {
+            $this->whatsappService->sendMessage(
+                $from,
+                "❌ Cash-out isn’t available right now. Try again later or email support@usesendra.com"
+            );
+
+            return ['success' => false, 'action' => 'sell_unconfigured'];
+        }
+
+        $healthBlock = $this->sellRampHealthGateIfDown($from);
+        if ($healthBlock !== null) {
+            return $healthBlock;
+        }
+
+        $trimMsg = trim($message);
+        $sendNaira = $this->sellParseSendNairaIntent($trimMsg);
+        if ($sendNaira !== null) {
+            return $this->sellSendNairaStart($from, $user, $sendNaira, $agg);
+        }
+
+        // Crypto P2P send (`send 50 USDT to …`) — not Naira bank cash-out
+        if (preg_match('/^send\s+/i', $trimMsg)) {
+            if (preg_match('/\b(naira|ngn)\b/i', $trimMsg) && $this->sellParseSendNairaIntent($trimMsg) === null) {
+                $this->whatsappService->sendMessage(
+                    $from,
+                    "Bank cash-out needs at least *₦100* in this form:\n`send 500 naira to 0123456789 GTBank`\n\n" .
+                    'For wallet sends use: `send 10 USDT to 0x…`'
+                );
+
+                return ['success' => false, 'action' => 'send_naira_format_or_min'];
+            }
+
+            return $this->handleSendInitiation($from, $trimMsg, $user);
+        }
+
+        if ($messageLower === 'sell_fiat_ghs') {
+            $this->clearSellChatContext($from);
+            $this->whatsappService->sendMessage(
+                $from,
+                "🇬🇭 *Ghana (GHS)* is coming soon.\n\nType *sell* to cash out in *Nigerian Naira*."
+            );
+
+            return ['success' => true, 'action' => 'sell_ghs_soon'];
+        }
+
+        if ($messageLower === 'sell_fiat_ngn') {
+            $this->setSellChatContext($from, ['flow' => 'sell', 'step' => 'await_amount', 'fiat' => 'NGN']);
+            $this->whatsappService->sendMessage(
+                $from,
+                "How much do you want to cash out?\nExample: *20 USDC* or *10 USDT*\n\n*cancel* stops."
+            );
+
+            return ['success' => true, 'action' => 'sell_ngn_amount'];
+        }
+
+        if ($messageLower === 'sell') {
+            $this->setSellChatContext($from, ['flow' => 'sell', 'step' => 'await_amount', 'fiat' => 'NGN']);
+            $this->whatsappService->sendMessage(
+                $from,
+                "Cash out to your Nigerian bank.\n\nHow much? e.g. *20 USDC* or *10 USDT*\n\n*cancel* stops."
+            );
+
+            return ['success' => true, 'action' => 'sell_ngn_amount'];
+        }
+
+        if (preg_match('/^sell\s+(\d+(?:\.\d+)?)\s*(usdc|usdt)\b/i', trim($message), $m)) {
+            $this->clearSellChatContext($from);
+
+            return $this->sellApplyQuoteAndPrompt(
+                $from,
+                $user,
+                (string) $m[1],
+                strtoupper($m[2]),
+                'NGN',
+                $agg
+            );
+        }
+
+        $this->whatsappService->sendMessage(
+            $from,
+            "Try: *sell 20 USDC* or *send 20000 naira to 0123456789 GTBank*"
+        );
+
+        return ['success' => false, 'action' => 'sell_usage'];
+    }
+
+    private function sellPrerequisitesOk($from, $user): bool
+    {
+        if (empty($user['aptos_address'])) {
+            $this->whatsappService->sendMessage($from, "❌ No wallet on file. Type *hi* to get started.");
+
+            return false;
+        }
+        if (empty($user['pin_hash'])) {
+            $this->whatsappService->sendMessage(
+                $from,
+                "⚠️ Set a *6-digit PIN* first. Type *hi* and complete setup."
+            );
+            $this->userModel->update($from, ['awaiting_pin_setup' => 1]);
+
+            return false;
+        }
+        if ((($user['account_type'] ?? '') === 'petra') || empty($user['encrypted_private_key'])) {
+            $this->whatsappService->sendMessage(
+                $from,
+                "⚠️ *Sell from WhatsApp* needs a Sendra-native wallet (we sign the transfer here).\n\n" .
+                "Type *hi* → create a new Sendra account, or use the web client for Petra-linked flows."
+            );
+
+            return false;
+        }
+
+        return true;
     }
 
     /**
-     * Step 1: Lookup account and get rate
+     * @return array<string, mixed>|null
      */
-    private function processOfframpRequest($from, $user, $amountNaira, $accountNumber, $bankCode)
+    private function getSellChatContext($userRow): ?array
     {
-        $centivService = new \App\Services\CentivService();
-
-        $this->whatsappService->sendMessage($from, "🔍 Looking up account details...");
-
-        // Account lookup
-        $accountInfo = $centivService->lookupBankAccount($accountNumber, $bankCode);
-
-        if (!$accountInfo['success']) {
-            $this->whatsappService->sendMessage(
-                $from,
-                "❌ Could not verify account. Please check the details and try again."
-            );
-            return ['success' => false];
+        $raw = $userRow['chat_context'] ?? null;
+        if ($raw === null || $raw === '') {
+            return null;
+        }
+        if (is_string($raw)) {
+            $raw = json_decode($raw, true);
+        }
+        if (!is_array($raw) || ($raw['flow'] ?? '') !== 'sell') {
+            return null;
         }
 
-        // Get exchange rate
-        $rateInfo = $centivService->getExchangeRate('USDC', $amountNaira);
+        return $raw;
+    }
 
-        if (!$rateInfo['success']) {
-            $this->whatsappService->sendMessage(
-                $from,
-                "❌ Could not fetch exchange rate. Please try again."
-            );
-            return ['success' => false];
+    /**
+     * @param array<string, mixed> $ctx
+     */
+    private function setSellChatContext($from, array $ctx): void
+    {
+        $this->userModel->update($from, ['chat_context' => json_encode($ctx, JSON_UNESCAPED_UNICODE)]);
+    }
+
+    private function clearSellChatContext($from): void
+    {
+        $this->userModel->update($from, ['chat_context' => null]);
+    }
+
+    /**
+     * WhatsApp users often paste the whole card or prefix with emoji; normalize affirmative replies.
+     *
+     * @param 'sell_quote_yes'|'sell_payee_yes' $buttonId
+     */
+    private function sellMessageMeansYes(string $message, string $messageLower, string $buttonId): bool
+    {
+        if ($messageLower === $buttonId || $messageLower === 'yes' || $messageLower === 'y') {
+            return true;
+        }
+        $stripped = preg_replace('/^[\s\p{So}\p{Sk}]+/u', '', $messageLower);
+        $stripped = trim((string) $stripped);
+        if ($stripped === 'yes' || $stripped === 'y') {
+            return true;
+        }
+        $lines = array_values(array_filter(array_map('trim', preg_split('/\r\n|\r|\n/', $message)), static fn ($ln) => $ln !== ''));
+        if ($lines !== []) {
+            $last = strtolower((string) end($lines));
+            $last = preg_replace('/^[\s\p{So}\p{Sk}]+/u', '', $last);
+            $last = trim((string) $last);
+            if ($last === 'yes' || $last === 'y' || $last === strtolower($buttonId)) {
+                return true;
+            }
         }
 
-        $cryptoAmount = $rateInfo['crypto_amount'];
-        $rate = $rateInfo['rate'];
-        $fee = $rateInfo['fee'];
+        return false;
+    }
 
-        // Check user balance
+    /**
+     * e.g. `send 20000 naira to 0227912723 gtbank` / `pay 15000 ngn to 0123456789 Access`
+     *
+     * @return array{amount_ngn: float, account: string, bank_guess: string}|null
+     */
+    private function sellParseSendNairaIntent(string $message): ?array
+    {
+        if (!preg_match(
+            '/^(?:send|pay)\s+([\d,\s]+(?:\.\d+)?)\s*(?:naira|ngn)\s+(?:to\s+)?(\d{10})\s+(.+)$/iu',
+            $message,
+            $m
+        )) {
+            return null;
+        }
+        $rawAmt = str_replace([',', ' '], '', (string) $m[1]);
+        if ($rawAmt === '' || !is_numeric($rawAmt)) {
+            return null;
+        }
+        $amt = (float) $rawAmt;
+        if ($amt < 100) {
+            return null;
+        }
+
+        return [
+            'amount_ngn' => $amt,
+            'account' => (string) $m[2],
+            'bank_guess' => trim((string) $m[3]),
+        ];
+    }
+
+    /**
+     * @param array{amount_ngn: float, account: string, bank_guess: string} $parsed
+     * @return array<string, mixed>
+     */
+    private function sellSendNairaStart($from, $user, array $parsed, \App\Services\SendraCentiivRampService $agg)
+    {
+        $this->setSellChatContext($from, [
+            'flow' => 'sell',
+            'step' => 'await_send_naira_asset',
+            'fiat' => 'NGN',
+            'target_receive_ngn' => $parsed['amount_ngn'],
+            'preset_account' => $parsed['account'],
+            'preset_bank_guess' => $parsed['bank_guess'],
+        ]);
+        $n = number_format($parsed['amount_ngn'], 0, '.', ',');
+        $this->whatsappService->sendButtonMessage(
+            $from,
+            "Send *≈ ₦{$n}* to `{$parsed['account']}` (*{$parsed['bank_guess']}*).\n\nWhich balance should we use?",
+            [
+                'sell_pick_usdt' => 'USDT',
+                'sell_pick_usdc' => 'USDC',
+            ]
+        );
+
+        return ['success' => true, 'action' => 'sell_send_naira_pick'];
+    }
+
+    /**
+     * Latest NGN receive for a crypto sale amount (USDC direct; USDT via bridge estimate when configured).
+     */
+    private function sellNgnReceiveForCryptoAmount(string $amountStr, string $asset, array $user, \App\Services\SendraCentiivRampService $agg): ?float
+    {
+        $wa = (string) ($user['phone_number'] ?? $user['phone'] ?? '');
+        if ($asset === 'USDC') {
+            $q = $agg->getQuote([
+                'fromAsset' => 'USDC',
+                'toAsset' => 'NGN',
+                'amount' => (float) $amountStr,
+            ]);
+            if (!$q['success']) {
+                @file_put_contents(
+                    '/tmp/sendra_ramp_debug.log',
+                    '[' . gmdate('c') . "] sellNgnReceiveForCryptoAmount USDC quote failed wa={$wa} http={$q['http_code']} err={$q['error']} data=" . json_encode($q['data']) . "\n",
+                    FILE_APPEND
+                );
+                return null;
+            }
+            $s = \App\Services\SendraCentiivRampService::summarizeQuoteNgn($q['data'], (float) $amountStr);
+
+            return $s['receive_ngn'];
+        }
+        if ($asset !== 'USDT' || !$this->oneclickCentiivRampConfigured()) {
+            return null;
+        }
+        $stellarDeposit = trim((string) ($_ENV['SENDRA_CENTIIV_STELLAR_USDC_DEPOSIT'] ?? getenv('SENDRA_CENTIIV_STELLAR_USDC_DEPOSIT') ?: ''));
+        $originUsdt = trim((string) ($_ENV['SENDRA_ONECLICK_APTOS_USDT_ASSET_ID'] ?? getenv('SENDRA_ONECLICK_APTOS_USDT_ASSET_ID') ?: 'nep141:aptos-88cb7619440a914fe6400149a12b443c3ac21d59.omft.near'));
+        $destStellarUsdc = trim((string) ($_ENV['SENDRA_ONECLICK_STELLAR_USDC_ASSET_ID'] ?? getenv('SENDRA_ONECLICK_STELLAR_USDC_ASSET_ID') ?: 'nep245:v2_1.omni.hot.tg:1100_111bzQBB65GxAPAVoxqmMcgYo5oS3txhqs1Uh1cgahKQUeTUq1TJu'));
+        $refundAptos = trim((string) ($user['aptos_address'] ?? ''));
+        if ($refundAptos === '' || $stellarDeposit === '') {
+            return null;
+        }
+        $deadlineIso = gmdate('Y-m-d\TH:i:s\Z', time() + 50 * 60);
+        $amountSmallest = \App\Services\SendraOneClickService::cryptoAmountToSmallestUnits($amountStr, 6);
+        $oneClick = new \App\Services\SendraOneClickService();
+        $dryBody = \App\Services\SendraOneClickService::buildAptosToStellarUsdcQuoteBody(
+            $originUsdt,
+            $destStellarUsdc,
+            $amountSmallest,
+            $stellarDeposit,
+            $refundAptos,
+            $deadlineIso,
+            true
+        );
+        $dryRes = $oneClick->requestQuote($dryBody);
+        if (!$dryRes['success']) {
+            @file_put_contents(
+                '/tmp/sendra_ramp_debug.log',
+                '[' . gmdate('c') . "] sellNgnReceiveForCryptoAmount USDT 1click quote failed wa={$wa} http={$dryRes['http_code']} err={$dryRes['error']} data=" . json_encode($dryRes['data']) . " raw=" . substr((string) ($dryRes['raw'] ?? ''), 0, 2000) . "\n",
+                FILE_APPEND
+            );
+            return null;
+        }
+        $parsedDry = \App\Services\SendraOneClickService::parseQuoteResponse($dryRes['data']);
+        $estUsdc = (float) ($parsedDry['amount_out_formatted'] ?? 0);
+        if ($estUsdc < 0.000001) {
+            @file_put_contents(
+                '/tmp/sendra_ramp_debug.log',
+                '[' . gmdate('c') . "] sellNgnReceiveForCryptoAmount USDT 1click parsed estUsdc too small wa={$wa} parsed=" . json_encode($parsedDry) . " data=" . json_encode($dryRes['data']) . "\n",
+                FILE_APPEND
+            );
+            return null;
+        }
+        $q = $agg->getQuote([
+            'fromAsset' => 'USDC',
+            'toAsset' => 'NGN',
+            'amount' => $estUsdc,
+        ]);
+        if (!$q['success']) {
+            @file_put_contents(
+                '/tmp/sendra_ramp_debug.log',
+                '[' . gmdate('c') . "] sellNgnReceiveForCryptoAmount USDT centiiv quote failed wa={$wa} http={$q['http_code']} err={$q['error']} estUsdc={$estUsdc} data=" . json_encode($q['data']) . "\n",
+                FILE_APPEND
+            );
+            return null;
+        }
+        $s = \App\Services\SendraCentiivRampService::summarizeQuoteNgn($q['data'], $estUsdc);
+
+        return $s['receive_ngn'];
+    }
+
+    /**
+     * Full NGN quote summary for a ledger crypto sale (USDC direct; USDT via bridge estimate when configured).
+     *
+     * @return array{
+     *   receive_ngn: ?float,
+     *   receive_ngn_display: string,
+     *   rate_hint: ?string,
+     *   fee_hint: ?string,
+     *   centiiv_error?: ?string,
+     *   centiiv_http_code?: ?int,
+     *   centiiv_data?: ?array<string, mixed>,
+     *   centiiv_min_usdc?: ?float
+     * }|null
+     */
+    private function sellSummarizeNgnForCryptoSellAmount(string $amountStr, string $asset, array $user, \App\Services\SendraCentiivRampService $agg): ?array
+    {
+        if ($asset === 'USDC') {
+            $q = $agg->getQuote([
+                'fromAsset' => 'USDC',
+                'toAsset' => 'NGN',
+                'amount' => (float) $amountStr,
+            ]);
+            if (!$q['success']) {
+                return [
+                    'receive_ngn' => null,
+                    'receive_ngn_display' => '',
+                    'rate_hint' => null,
+                    'fee_hint' => null,
+                    'centiiv_error' => $q['error'] ?? null,
+                    'centiiv_http_code' => $q['http_code'] ?? null,
+                    'centiiv_data' => is_array($q['data'] ?? null) ? $q['data'] : null,
+                    'centiiv_min_usdc' => $this->parseCentiivQuoteMinUsdc($q['error'] ?? null),
+                ];
+            }
+
+            return \App\Services\SendraCentiivRampService::summarizeQuoteNgn($q['data'], (float) $amountStr);
+        }
+        if ($asset !== 'USDT' || !$this->oneclickCentiivRampConfigured()) {
+            return null;
+        }
+        $stellarDeposit = trim((string) ($_ENV['SENDRA_CENTIIV_STELLAR_USDC_DEPOSIT'] ?? getenv('SENDRA_CENTIIV_STELLAR_USDC_DEPOSIT') ?: ''));
+        $originUsdt = trim((string) ($_ENV['SENDRA_ONECLICK_APTOS_USDT_ASSET_ID'] ?? getenv('SENDRA_ONECLICK_APTOS_USDT_ASSET_ID') ?: 'nep141:aptos-88cb7619440a914fe6400149a12b443c3ac21d59.omft.near'));
+        $destStellarUsdc = trim((string) ($_ENV['SENDRA_ONECLICK_STELLAR_USDC_ASSET_ID'] ?? getenv('SENDRA_ONECLICK_STELLAR_USDC_ASSET_ID') ?: 'nep245:v2_1.omni.hot.tg:1100_111bzQBB65GxAPAVoxqmMcgYo5oS3txhqs1Uh1cgahKQUeTUq1TJu'));
+        $refundAptos = trim((string) ($user['aptos_address'] ?? ''));
+        if ($refundAptos === '' || $stellarDeposit === '') {
+            return null;
+        }
+        $deadlineIso = gmdate('Y-m-d\TH:i:s\Z', time() + 50 * 60);
+        $amountSmallest = \App\Services\SendraOneClickService::cryptoAmountToSmallestUnits($amountStr, 6);
+        $oneClick = new \App\Services\SendraOneClickService();
+        $dryBody = \App\Services\SendraOneClickService::buildAptosToStellarUsdcQuoteBody(
+            $originUsdt,
+            $destStellarUsdc,
+            $amountSmallest,
+            $stellarDeposit,
+            $refundAptos,
+            $deadlineIso,
+            true
+        );
+        $dryRes = $oneClick->requestQuote($dryBody);
+        if (!$dryRes['success']) {
+            return null;
+        }
+        $parsedDry = \App\Services\SendraOneClickService::parseQuoteResponse($dryRes['data']);
+        $estUsdc = (float) ($parsedDry['amount_out_formatted'] ?? 0);
+        if ($estUsdc < 0.000001) {
+            return null;
+        }
+        $q = $agg->getQuote([
+            'fromAsset' => 'USDC',
+            'toAsset' => 'NGN',
+            'amount' => $estUsdc,
+        ]);
+        if (!$q['success']) {
+            return [
+                'receive_ngn' => null,
+                'receive_ngn_display' => '',
+                'rate_hint' => null,
+                'fee_hint' => null,
+                'centiiv_error' => $q['error'] ?? null,
+                'centiiv_http_code' => $q['http_code'] ?? null,
+                'centiiv_data' => is_array($q['data'] ?? null) ? $q['data'] : null,
+                'centiiv_min_usdc' => $this->parseCentiivQuoteMinUsdc($q['error'] ?? null),
+            ];
+        }
+
+        return \App\Services\SendraCentiivRampService::summarizeQuoteNgn($q['data'], $estUsdc);
+    }
+
+    private function parseCentiivQuoteMinUsdc(?string $error): ?float
+    {
+        if ($error === null || $error === '') {
+            return null;
+        }
+        if (!preg_match('/minimum transaction amount of\s*([0-9]+(?:\.[0-9]+)?)/i', $error, $m)) {
+            return null;
+        }
+        $v = (float) $m[1];
+        if ($v <= 0) {
+            return null;
+        }
+
+        return $v;
+    }
+
+    private function buildCentiivMinPayoutMessage(\App\Services\SendraCentiivRampService $agg, float $minUsdc): string
+    {
+        // Try to convert Centiiv’s min USDC to an NGN minimum for UX.
+        $q = $agg->getQuote([
+            'fromAsset' => 'USDC',
+            'toAsset' => 'NGN',
+            'amount' => $minUsdc,
+        ]);
+        if ($q['success']) {
+            $s = \App\Services\SendraCentiivRampService::summarizeQuoteNgn($q['data'], $minUsdc);
+            $minNgn = (float) ($s['receive_ngn'] ?? 0);
+            if ($minNgn > 0) {
+                return
+                    "❌ Amount too small for bank payout right now.\n" .
+                    'Minimum is *≈ ₦' . number_format($minNgn, 0, '.', ',') . "*.\n" .
+                    'Try a higher amount (e.g. *₦' . number_format(max($minNgn, 1000), 0, '.', ',') . '* or more).';
+            }
+        }
+
+        return
+            "❌ Amount too small for bank payout right now.\n" .
+            'Minimum is *' . rtrim(rtrim(number_format($minUsdc, 6, '.', ''), '0'), '.') . "* USDC on this rail.\n" .
+            'Try a higher amount.';
+    }
+
+    /**
+     * Accuracy-first sizing for a target NGN payout, but optimized to avoid many re-quotes.
+     *
+     * @return array{
+     *   crypto_amount: string,
+     *   receive_ngn_display: string,
+     *   rate_hint?: ?string,
+     *   fee_hint?: ?string,
+     *   oneclick_quote_data?: ?array<string, mixed>,
+     *   oneclick_est_usdc?: ?float
+     * }|null
+     */
+    private function sellSolveCryptoAmountForTargetNgn($from, array $user, string $asset, float $targetNgn, \App\Services\SendraCentiivRampService $agg): ?array
+    {
         $balances = $this->fetchAptosBalance($user['aptos_address']);
-        $usdcBalance = floatval(str_replace(',', '', $balances['USDC']));
+        if ($balances === null) {
+            $this->whatsappService->sendMessage($from, '❌ Could not read your balance. Try again.');
 
-        if ($usdcBalance < $cryptoAmount) {
+            return null;
+        }
+        $avail = (float) str_replace(',', '', $balances[$asset] ?? '0');
+        if ($avail < 0.01) {
             $this->whatsappService->sendMessage(
                 $from,
-                "❌ Insufficient balance\n\n" .
-                "Required: *{$cryptoAmount} USDC*\n" .
-                "Available: *{$usdcBalance} USDC*\n\n" .
-                "Type `/balance` to check your wallet."
+                "❌ No *{$asset}* balance here. Pick the other token or type *cancel*."
             );
+
+            return null;
+        }
+        $min = 0.01;
+
+        $toleranceNgn = (float) ($_ENV['SENDRA_SELL_TARGET_NGN_TOLERANCE'] ?? getenv('SENDRA_SELL_TARGET_NGN_TOLERANCE') ?: 1);
+        if ($toleranceNgn < 1) {
+            $toleranceNgn = 1;
+        }
+        $maxIters = (int) ($_ENV['SENDRA_SELL_TARGET_NGN_MAX_ITERS'] ?? getenv('SENDRA_SELL_TARGET_NGN_MAX_ITERS') ?: 14);
+        if ($maxIters < 4) {
+            $maxIters = 4;
+        }
+        if ($maxIters > 18) {
+            $maxIters = 18;
+        }
+
+        // USDC: binary search by live quote until within tolerance.
+        if ($asset === 'USDC') {
+            $hi = $avail;
+            $lo = $min;
+            $bestAmt = null;
+            $bestSum = null;
+            $bestAboveAmt = null;
+            $bestAboveSum = null;
+
+            // quick infeasibility check
+            $hiSum = $this->sellSummarizeNgnForCryptoSellAmount((string) $hi, 'USDC', $user, $agg);
+            if ($hiSum === null || empty($hiSum['receive_ngn'])) {
+                $this->whatsappService->sendMessage($from, '❌ Could not get a rate right now. Try again.');
+
+                return null;
+            }
+            if ((float) $hiSum['receive_ngn'] + 1e-6 < $targetNgn) {
+                $this->whatsappService->sendMessage(
+                    $from,
+                    '❌ Your balance isn’t enough for *≈ ₦' . number_format($targetNgn, 0, '.', ',') . "*.\n" .
+                    'You have *' . ($balances[$asset] ?? '0') . "* {$asset}. Try a smaller amount."
+                );
+
+                return null;
+            }
+
+            for ($i = 0; $i < $maxIters; $i++) {
+                $mid = ($lo + $hi) / 2.0;
+                $midStr = rtrim(rtrim(number_format($mid, 6, '.', ''), '0'), '.');
+                if ($midStr === '' || (float) $midStr < $min) {
+                    $midStr = '0.01';
+                }
+                $sum = $this->sellSummarizeNgnForCryptoSellAmount($midStr, 'USDC', $user, $agg);
+                if ($sum === null || empty($sum['receive_ngn'])) {
+                    $minUsdc = (float) ($sum['centiiv_min_usdc'] ?? 0);
+                    if ($minUsdc > 0) {
+                        // Too small for the rail; increase the amount and keep searching instead of bailing.
+                        $lo = max($lo, (float) $midStr);
+                        continue;
+                    }
+                    $this->whatsappService->sendMessage($from, '❌ Could not refresh the rate. Try again.');
+
+                    return null;
+                }
+                $recv = (float) $sum['receive_ngn'];
+                $diff = $recv - $targetNgn;
+                if ($bestSum === null || abs($diff) < abs(((float) $bestSum['receive_ngn']) - $targetNgn)) {
+                    $bestAmt = $midStr;
+                    $bestSum = $sum;
+                }
+                // We must not underpay: prefer the smallest quote that is >= target.
+                if ($recv + 1e-9 >= $targetNgn) {
+                    if ($bestAboveSum === null || (float) $recv < (float) $bestAboveSum['receive_ngn']) {
+                        $bestAboveAmt = $midStr;
+                        $bestAboveSum = $sum;
+                    }
+                    if (abs($diff) <= $toleranceNgn) {
+                        $bestAboveAmt = $midStr;
+                        $bestAboveSum = $sum;
+                        break;
+                    }
+                }
+                if ($recv >= $targetNgn) {
+                    $hi = $mid;
+                } else {
+                    $lo = $mid;
+                }
+            }
+
+            // Enforce >= target
+            if ($bestAboveAmt !== null && $bestAboveSum !== null) {
+                $bestAmt = $bestAboveAmt;
+                $bestSum = $bestAboveSum;
+            }
+
+            if ($bestAmt === null || $bestSum === null || empty($bestSum['receive_ngn']) || (float) $bestSum['receive_ngn'] + 1e-9 < $targetNgn) {
+                return null;
+            }
+
+            return [
+                'crypto_amount' => $bestAmt,
+                'receive_ngn_display' => $bestSum['receive_ngn_display'],
+                'rate_hint' => $bestSum['rate_hint'],
+                'fee_hint' => $bestSum['fee_hint'],
+            ];
+        }
+
+        // USDT: maximum accuracy — binary search using real 1Click dry (USDT→USDC) + Centiiv quote (USDC→NGN) each step.
+        if ($asset !== 'USDT' || !$this->oneclickCentiivRampConfigured()) {
+            $this->whatsappService->sendMessage($from, '❌ USDT isn’t available right now. Try *USDC*.');
+
+            return null;
+        }
+
+        $stellarDeposit = trim((string) ($_ENV['SENDRA_CENTIIV_STELLAR_USDC_DEPOSIT'] ?? getenv('SENDRA_CENTIIV_STELLAR_USDC_DEPOSIT') ?: ''));
+        $originUsdt = trim((string) ($_ENV['SENDRA_ONECLICK_APTOS_USDT_ASSET_ID'] ?? getenv('SENDRA_ONECLICK_APTOS_USDT_ASSET_ID') ?: 'nep141:aptos-88cb7619440a914fe6400149a12b443c3ac21d59.omft.near'));
+        $destStellarUsdc = trim((string) ($_ENV['SENDRA_ONECLICK_STELLAR_USDC_ASSET_ID'] ?? getenv('SENDRA_ONECLICK_STELLAR_USDC_ASSET_ID') ?: 'nep245:v2_1.omni.hot.tg:1100_111bzQBB65GxAPAVoxqmMcgYo5oS3txhqs1Uh1cgahKQUeTUq1TJu'));
+        $refundAptos = trim((string) ($user['aptos_address'] ?? ''));
+        if ($refundAptos === '' || $stellarDeposit === '') {
+            $this->whatsappService->sendMessage($from, '❌ Could not start this payout. Try again.');
+
+            return null;
+        }
+        $deadlineIso = gmdate('Y-m-d\TH:i:s\Z', time() + 50 * 60);
+        $oneClick = new \App\Services\SendraOneClickService();
+
+        $lo = $min;
+        $hi = $avail;
+        $bestAmt = null;
+        $bestRecv = null;
+        $bestSum = null;
+        $bestAboveAmt = null;
+        $bestAboveRecv = null;
+        $bestAboveSum = null;
+
+        // quick infeasibility check at max (real pricing)
+        $hiRecv = $this->sellNgnReceiveForCryptoAmount((string) $hi, 'USDT', $user, $agg);
+        if ($hiRecv === null) {
+            $wa = (string) ($user['phone_number'] ?? $user['phone'] ?? '');
+            @file_put_contents(
+                '/tmp/sendra_ramp_debug.log',
+                '[' . gmdate('c') . "] sellSolveCryptoAmountForTargetNgn USDT hiRecv null wa={$wa} (1click or centiiv quote failed)\n",
+                FILE_APPEND
+            );
+            $this->whatsappService->sendMessage(
+                $from,
+                '❌ The *Stellar payout* swap quote failed (1Click / NEAR Intents). This is usually on the provider side, not your wallet. Try again in a few minutes. *USDC* uses the same bridge.'
+            );
+
+            return null;
+        }
+        if ($hiRecv + 1e-6 < $targetNgn) {
+            $this->whatsappService->sendMessage(
+                $from,
+                '❌ Your balance isn’t enough for *≈ ₦' . number_format($targetNgn, 0, '.', ',') . "*.\n" .
+                'You have *' . ($balances[$asset] ?? '0') . "* {$asset}. Try a smaller amount."
+            );
+
+            return null;
+        }
+
+        for ($i = 0; $i < $maxIters; $i++) {
+            $mid = ($lo + $hi) / 2.0;
+            $midStr = rtrim(rtrim(number_format($mid, 6, '.', ''), '0'), '.');
+            if ($midStr === '' || (float) $midStr < $min) {
+                $midStr = '0.01';
+            }
+
+            // 1Click dry quote for this USDT amount -> est USDC
+            $midSmallest = \App\Services\SendraOneClickService::cryptoAmountToSmallestUnits($midStr, 6);
+            $dryBody = \App\Services\SendraOneClickService::buildAptosToStellarUsdcQuoteBody(
+                $originUsdt,
+                $destStellarUsdc,
+                $midSmallest,
+                $stellarDeposit,
+                $refundAptos,
+                $deadlineIso,
+                true
+            );
+            $dry = $oneClick->requestQuote($dryBody);
+            if (!$dry['success']) {
+                $wa = (string) ($user['phone_number'] ?? $user['phone'] ?? '');
+                @file_put_contents(
+                    '/tmp/sendra_ramp_debug.log',
+                    '[' . gmdate('c') . "] sellSolveCryptoAmountForTargetNgn USDT 1click dry quote failed wa={$wa} http={$dry['http_code']} err={$dry['error']} data=" . json_encode($dry['data']) . " raw=" . substr((string) ($dry['raw'] ?? ''), 0, 2000) . "\n",
+                    FILE_APPEND
+                );
+                $this->whatsappService->sendMessage(
+                    $from,
+                    '❌ The *Stellar payout* swap quote failed (1Click / NEAR Intents). This is usually on the provider side, not your wallet. Try again in a few minutes. *USDC* uses the same bridge.'
+                );
+
+                return null;
+            }
+            $parsed = \App\Services\SendraOneClickService::parseQuoteResponse($dry['data']);
+            $estUsdc = (float) ($parsed['amount_out_formatted'] ?? 0);
+            if ($estUsdc <= 0) {
+                $this->whatsappService->sendMessage($from, '❌ Quote response incomplete. Try again.');
+
+                return null;
+            }
+
+            $sum = $agg->getQuote([
+                'fromAsset' => 'USDC',
+                'toAsset' => 'NGN',
+                'amount' => $estUsdc,
+            ]);
+            if (!$sum['success']) {
+                $minUsdc = $this->parseCentiivQuoteMinUsdc($sum['error'] ?? null);
+                if ($minUsdc !== null) {
+                    // This USDT amount yields too little USDC for Centiiv; push amount upward and continue.
+                    $lo = max($lo, $mid);
+                    continue;
+                } else {
+                    $this->whatsappService->sendMessage($from, '❌ Could not refresh the rate. Try again.');
+                }
+
+                return null;
+            }
+            $s = \App\Services\SendraCentiivRampService::summarizeQuoteNgn($sum['data'], $estUsdc);
+            $recv = (float) ($s['receive_ngn'] ?? 0);
+            if ($recv <= 0) {
+                $this->whatsappService->sendMessage($from, '❌ Rate unavailable. Try again.');
+
+                return null;
+            }
+
+            $diff = $recv - $targetNgn;
+            if ($bestRecv === null || abs($diff) < abs($bestRecv - $targetNgn)) {
+                $bestAmt = $midStr;
+                $bestRecv = $recv;
+                $bestSum = $s;
+            }
+            // Must not underpay: track best (smallest) recv >= target.
+            if ($recv + 1e-9 >= $targetNgn) {
+                if ($bestAboveRecv === null || $recv < $bestAboveRecv) {
+                    $bestAboveAmt = $midStr;
+                    $bestAboveRecv = $recv;
+                    $bestAboveSum = $s;
+                }
+                if (abs($diff) <= $toleranceNgn) {
+                    break;
+                }
+            }
+            if ($recv >= $targetNgn) {
+                $hi = $mid;
+            } else {
+                $lo = $mid;
+            }
+        }
+
+        if ($bestAboveAmt !== null && $bestAboveSum !== null && $bestAboveRecv !== null) {
+            $bestAmt = $bestAboveAmt;
+            $bestSum = $bestAboveSum;
+            $bestRecv = $bestAboveRecv;
+        }
+
+        if ($bestAmt === null || $bestSum === null || $bestRecv === null || $bestRecv + 1e-9 < $targetNgn) {
+            return null;
+        }
+
+        // One final 1Click dry quote at the chosen amount for accurate order sizing + reuse.
+        $finalSmallest = \App\Services\SendraOneClickService::cryptoAmountToSmallestUnits($bestAmt, 6);
+        $finalBody = \App\Services\SendraOneClickService::buildAptosToStellarUsdcQuoteBody(
+            $originUsdt,
+            $destStellarUsdc,
+            $finalSmallest,
+            $stellarDeposit,
+            $refundAptos,
+            $deadlineIso,
+            true
+        );
+        $finalDry = $oneClick->requestQuote($finalBody);
+        if (!$finalDry['success']) {
+            $this->whatsappService->sendMessage($from, '❌ Could not lock a USDT quote right now. Try again.');
+
+            return null;
+        }
+        $finalParsed = \App\Services\SendraOneClickService::parseQuoteResponse($finalDry['data']);
+        $finalUsdc = (float) ($finalParsed['amount_out_formatted'] ?? 0);
+        if ($finalUsdc <= 0) {
+            $this->whatsappService->sendMessage($from, '❌ Quote response incomplete. Try again.');
+
+            return null;
+        }
+        $finalQ = $agg->getQuote([
+            'fromAsset' => 'USDC',
+            'toAsset' => 'NGN',
+            'amount' => $finalUsdc,
+        ]);
+        if (!$finalQ['success']) {
+            $minUsdc = $this->parseCentiivQuoteMinUsdc($finalQ['error'] ?? null);
+            if ($minUsdc !== null) {
+                // Final sizing still too small: prompt user with minimum and stop.
+                $this->whatsappService->sendMessage($from, $this->buildCentiivMinPayoutMessage($agg, $minUsdc));
+            } else {
+                $this->whatsappService->sendMessage($from, '❌ Could not refresh the rate. Try again.');
+            }
+
+            return null;
+        }
+        $finalS = \App\Services\SendraCentiivRampService::summarizeQuoteNgn($finalQ['data'], $finalUsdc);
+        // Enforce "at least target": if final quote underpays, bump amount slightly upward and re-lock once.
+        $finalRecv = (float) ($finalS['receive_ngn'] ?? 0);
+        if ($finalRecv > 0 && $finalRecv + 1e-9 < $targetNgn) {
+            // Move the low bound up to current best and re-run a few more steps upward.
+            $lo = max($lo, (float) $bestAmt);
+            for ($j = 0; $j < 4; $j++) {
+                $mid = ($lo + $hi) / 2.0;
+                $midStr = rtrim(rtrim(number_format($mid, 6, '.', ''), '0'), '.');
+                if ($midStr === '' || (float) $midStr < $min) {
+                    $midStr = '0.01';
+                }
+                $midSmallest = \App\Services\SendraOneClickService::cryptoAmountToSmallestUnits($midStr, 6);
+                $midBody = \App\Services\SendraOneClickService::buildAptosToStellarUsdcQuoteBody(
+                    $originUsdt,
+                    $destStellarUsdc,
+                    $midSmallest,
+                    $stellarDeposit,
+                    $refundAptos,
+                    $deadlineIso,
+                    true
+                );
+                $midDry = $oneClick->requestQuote($midBody);
+                if (!$midDry['success']) {
+                    break;
+                }
+                $midParsed = \App\Services\SendraOneClickService::parseQuoteResponse($midDry['data']);
+                $midUsdc = (float) ($midParsed['amount_out_formatted'] ?? 0);
+                if ($midUsdc <= 0) {
+                    break;
+                }
+                $midQ = $agg->getQuote([
+                    'fromAsset' => 'USDC',
+                    'toAsset' => 'NGN',
+                    'amount' => $midUsdc,
+                ]);
+                if (!$midQ['success']) {
+                    break;
+                }
+                $midS = \App\Services\SendraCentiivRampService::summarizeQuoteNgn($midQ['data'], $midUsdc);
+                $midRecv = (float) ($midS['receive_ngn'] ?? 0);
+                if ($midRecv <= 0) {
+                    break;
+                }
+                if ($midRecv + 1e-9 >= $targetNgn) {
+                    $bestAmt = $midStr;
+                    $finalDry = $midDry;
+                    $finalUsdc = $midUsdc;
+                    $finalS = $midS;
+                    break;
+                }
+                $lo = $mid;
+            }
+        }
+
+        return [
+            'crypto_amount' => $bestAmt,
+            'receive_ngn_display' => (string) ($finalS['receive_ngn_display'] ?? $bestSum['receive_ngn_display'] ?? number_format($bestRecv, 2, '.', ',')),
+            'rate_hint' => $finalS['rate_hint'] ?? ($bestSum['rate_hint'] ?? null),
+            'fee_hint' => $finalS['fee_hint'] ?? ($bestSum['fee_hint'] ?? null),
+            'oneclick_quote_data' => is_array($finalDry['data']) ? $finalDry['data'] : null,
+            'oneclick_est_usdc' => $finalUsdc,
+        ];
+    }
+
+    /**
+     * @param array<string, mixed> $ctx
+     * @return array<string, mixed>
+     */
+    private function sellSendNairaAfterAssetPick($from, array $userRow, array $ctx, string $asset, \App\Services\SendraCentiivRampService $agg)
+    {
+        $target = (float) ($ctx['target_receive_ngn'] ?? 0);
+        if ($target < 100) {
+            $this->clearSellChatContext($from);
+
+            return ['success' => false];
+        }
+        if ($asset === 'USDT' && !$this->oneclickCentiivRampConfigured()) {
+            $this->whatsappService->sendMessage(
+                $from,
+                "❌ USDT isn’t available for this flow here. Tap *USDC* or type *cancel*."
+            );
+
+            $ctx['step'] = 'await_send_naira_asset';
+            unset($ctx['asset']);
+            $this->setSellChatContext($from, $ctx);
+
+            return ['success' => false];
+        }
+        $user = $this->userModel->findByPhone($from) ?: $userRow;
+        $solved = $this->sellSolveCryptoAmountForTargetNgn($from, $user, $asset, $target, $agg);
+        if ($solved === null) {
+            $ctx['step'] = 'await_send_naira_asset';
+            unset($ctx['asset']);
+            $this->setSellChatContext($from, $ctx);
+
+            return ['success' => false];
+        }
+        $avail = (float) str_replace(',', '', ($this->fetchAptosBalance($user['aptos_address']) ?? [])[$asset] ?? '0');
+        if ($avail + 1e-9 < (float) $solved['crypto_amount']) {
+            $this->whatsappService->sendMessage($from, '❌ Balance changed. Try again.');
+
+            $ctx['step'] = 'await_send_naira_asset';
+            unset($ctx['asset']);
+            $this->setSellChatContext($from, $ctx);
+
+            return ['success' => false];
+        }
+        $ctx['crypto_amount'] = $solved['crypto_amount'];
+        $ctx['asset'] = $asset;
+        $ctx['receive_ngn_display'] = $solved['receive_ngn_display'];
+        $ctx['send_naira_rate_line'] = !empty($solved['rate_hint']) ? ('Rate: *' . $solved['rate_hint'] . '*') : '';
+        $ctx['send_naira_fee_line'] = (string) ($solved['fee_hint'] ?? '');
+        if ($asset === 'USDT' && !empty($solved['oneclick_quote_data']) && is_array($solved['oneclick_quote_data'])) {
+            $ctx['oneclick_dry_quote_data'] = $solved['oneclick_quote_data'];
+            $ctx['oneclick_dry_est_usdc'] = $solved['oneclick_est_usdc'] ?? null;
+        }
+        $ctx['fiat'] = 'NGN';
+        $ctx['send_naira_quick'] = true;
+
+        return $this->sellResolveBankAndConfirmPayee(
+            $from,
+            $userRow,
+            $ctx,
+            (string) ($ctx['preset_account'] ?? ''),
+            trim((string) ($ctx['preset_bank_guess'] ?? '')),
+            $agg,
+            true
+        );
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function sellApplyQuoteAndPrompt($from, $user, string $amountStr, string $asset, string $fiat, \App\Services\SendraCentiivRampService $agg)
+    {
+        $amount = (float) $amountStr;
+        if ($amount < 0.01) {
+            $this->whatsappService->sendMessage($from, "⚠️ Minimum amount is *0.01* {$asset}.");
+
+            return ['success' => false];
+        }
+
+        if (!in_array($asset, ['USDC', 'USDT'], true)) {
+            $this->whatsappService->sendMessage($from, "⚠️ Only *USDC* or *USDT* on Aptos are supported.");
+
+            return ['success' => false];
+        }
+
+        if ($fiat !== 'NGN') {
+            $this->whatsappService->sendMessage($from, "⚠️ Only *NGN* payouts are available in this chat for now.");
+
+            return ['success' => false];
+        }
+
+        $balances = $this->fetchAptosBalance($user['aptos_address']);
+        if ($balances === null) {
+            $this->whatsappService->sendMessage($from, "❌ Could not read your balance. Try again.");
+
+            return ['success' => false];
+        }
+        $avail = (float) str_replace(',', '', $balances[$asset] ?? '0');
+        if ($avail + 1e-9 < $amount) {
+            $this->whatsappService->sendMessage(
+                $from,
+                "❌ Insufficient *{$asset}* balance.\nYou have: *{$balances[$asset]}*\nNeeded: *{$amountStr}*"
+            );
+
             return ['success' => false, 'reason' => 'insufficient_balance'];
         }
 
-        // Store pending offramp transaction
-        $pendingId = $this->storePendingOfframp([
-            'user_phone' => $from,
-            'amount_naira' => $amountNaira,
-            'crypto_amount' => $cryptoAmount,
-            'currency' => 'USDC',
-            'rate' => $rate,
-            'fee' => $fee,
-            'account_number' => $accountNumber,
-            'account_name' => $accountInfo['account_name'],
-            'bank_code' => $bankCode,
-            'bank_name' => $accountInfo['bank_name'],
-            'expires_at' => date('Y-m-d H:i:s', time() + 300)
+        $centiivFromAsset = $asset;
+        $centiivQuoteAmount = $amount;
+        $bridgeHint = '';
+
+        if ($this->oneclickCentiivRampConfigured() && $asset === 'USDT') {
+            $this->whatsappService->sendMessage($from, '⏳ Getting a rate…');
+            $stellarDeposit = trim((string) ($_ENV['SENDRA_CENTIIV_STELLAR_USDC_DEPOSIT'] ?? getenv('SENDRA_CENTIIV_STELLAR_USDC_DEPOSIT') ?: ''));
+            $originUsdt = trim((string) ($_ENV['SENDRA_ONECLICK_APTOS_USDT_ASSET_ID'] ?? getenv('SENDRA_ONECLICK_APTOS_USDT_ASSET_ID') ?: 'nep141:aptos-88cb7619440a914fe6400149a12b443c3ac21d59.omft.near'));
+            $destStellarUsdc = trim((string) ($_ENV['SENDRA_ONECLICK_STELLAR_USDC_ASSET_ID'] ?? getenv('SENDRA_ONECLICK_STELLAR_USDC_ASSET_ID') ?: 'nep245:v2_1.omni.hot.tg:1100_111bzQBB65GxAPAVoxqmMcgYo5oS3txhqs1Uh1cgahKQUeTUq1TJu'));
+            $refundAptos = trim((string) ($user['aptos_address'] ?? ''));
+            if ($refundAptos === '') {
+                $this->whatsappService->sendMessage($from, '❌ Missing Aptos address. Contact support.');
+
+                return ['success' => false];
+            }
+            $deadlineIso = gmdate('Y-m-d\TH:i:s\Z', time() + 50 * 60);
+            $amountSmallest = \App\Services\SendraOneClickService::cryptoAmountToSmallestUnits($amountStr, 6);
+            $oneClick = new \App\Services\SendraOneClickService();
+            $dryBody = \App\Services\SendraOneClickService::buildAptosToStellarUsdcQuoteBody(
+                $originUsdt,
+                $destStellarUsdc,
+                $amountSmallest,
+                $stellarDeposit,
+                $refundAptos,
+                $deadlineIso,
+                true
+            );
+            $dryRes = $oneClick->requestQuote($dryBody);
+            if (!$dryRes['success']) {
+                $err = $dryRes['error'] ?? 'bridge quote failed';
+                error_log("Sendra sell: USDT bridge quote for rate preview failed {$from}: {$err} " . json_encode($dryRes['data']));
+                $this->whatsappService->sendMessage(
+                    $from,
+                    "❌ The Stellar bridge quote failed (1Click), so we can't price USDT→Naira right now.\nTry again in a few minutes. *USDC* uses the same bridge."
+                );
+
+                return ['success' => false];
+            }
+            $parsedDry = \App\Services\SendraOneClickService::parseQuoteResponse($dryRes['data']);
+            $estUsdc = (float) ($parsedDry['amount_out_formatted'] ?? 0);
+            if ($estUsdc < 0.01) {
+                $this->whatsappService->sendMessage($from, '❌ Bridge estimate too small for a rate quote. Try a larger amount.');
+
+                return ['success' => false];
+            }
+            $centiivFromAsset = 'USDC';
+            $centiivQuoteAmount = $estUsdc;
+            $bridgeHint = '';
+        } else {
+            $this->whatsappService->sendMessage($from, '⏳ Getting a rate…');
+        }
+
+        $quote = $agg->getQuote([
+            'fromAsset' => $centiivFromAsset,
+            'toAsset' => 'NGN',
+            'amount' => $centiivQuoteAmount,
         ]);
 
-        $this->userModel->setPendingTransaction($from, $pendingId);
+        if (!$quote['success']) {
+            $err = $quote['error'] ?? 'Quote failed';
+            error_log("Centiiv quote failed for {$from}: {$err} " . json_encode($quote['data']));
+            if (stripos($err, 'pk_sandbox') !== false
+                || stripos($err, 'pk_live') !== false
+                || stripos($err, 'Invalid API key') !== false
+                || stripos($err, 'public key') !== false) {
+                error_log(
+                    'Sendra: set SENDRA_CENTIIV_JWT to a Centiiv *public* key (pk_sandbox_* or pk_live_* from the dashboard). '
+                    . 'cnt-* / Direct Pay keys do not work on /public/quote.'
+                );
+            }
 
-        // Show confirmation
+            $body = "❌ No rate available right now.";
+            // Centiiv may return a rail constraint bug like: "maximum transaction amount of 0 for this rail".
+            // In practice this means the corridor is effectively disabled/misconfigured, not a user error.
+            if (preg_match('/maximum transaction amount of 0/i', $err)) {
+                $body = "❌ NGN payout is temporarily unavailable right now.\n\nPlease try again later.";
+                $this->whatsappService->sendMessage($from, $body);
+
+                return ['success' => false];
+            }
+            if (preg_match('/no rail|no route|no liquidity|no corridor|liquidity provider/i', $err)) {
+                error_log("Sendra sell: quote liquidity note {$from} asset={$asset} centiiv_from={$centiivFromAsset} err={$err}");
+                $body .= "\n\nTry *USDC*, another amount, or again later.";
+            } else {
+                $body .= "\n\nTry again shortly.";
+            }
+
+            $this->whatsappService->sendMessage($from, $body);
+
+            return ['success' => false];
+        }
+
+        $summary = \App\Services\SendraCentiivRampService::summarizeQuoteNgn($quote['data'], $centiivQuoteAmount);
+        $feeLine = $summary['fee_hint'] ? ("\n" . $summary['fee_hint']) : '';
+        $rateLine = $summary['rate_hint'] ? ("\n" . $summary['rate_hint']) : '';
+
+        $ctx = [
+            'flow' => 'sell',
+            'step' => 'await_quote_confirm',
+            'fiat' => $fiat,
+            'crypto_amount' => $amountStr,
+            'asset' => $asset,
+            'receive_ngn_display' => $summary['receive_ngn_display'],
+        ];
+        $this->setSellChatContext($from, $ctx);
+
         $this->whatsappService->sendButtonMessage(
             $from,
-            "💸 *Confirm Withdrawal*\n\n" .
-            "📤 Send: ₦{$amountNaira}\n" .
-            "💰 Cost: *{$cryptoAmount} USDC*\n" .
-            "📊 Rate: ₦{$rate}/USDC\n" .
-            "💵 Fee: ₦{$fee}\n\n" .
-            "🏦 *Recipient Details:*\n" .
-            "Name: *{$accountInfo['account_name']}*\n" .
-            "Account: {$accountNumber}\n" .
-            "Bank: {$accountInfo['bank_name']}\n\n" .
-            "⚠️ Please verify the account name is correct.\n\n" .
-            "Enter your *6-digit PIN* to confirm:",
-            ['cancel_' . $pendingId => '❌ Cancel']
+            "💱 *Sell {$amountStr} {$asset}*\n\n" .
+            "Bank payout *≈ ₦{$summary['receive_ngn_display']}* (indicative).{$feeLine}{$rateLine}{$bridgeHint}\n\n" .
+            "Continue?",
+            [
+                'sell_quote_yes' => '✅ Yes',
+                'sell_quote_change' => '✏️ Different amount',
+            ]
         );
 
-        return ['success' => true, 'pending_id' => $pendingId];
+        return ['success' => true, 'action' => 'sell_quote'];
     }
 
     /**
-     * Execute offramp after PIN confirmation
+     * @param array<string, mixed> $ctx
      */
-    private function executeOfframp($from, $user, $pending)
+    private function sellResolveBankAndConfirmPayee($from, $userRow, array $ctx, string $accountNumber, string $bankNameGuess, \App\Services\SendraCentiivRampService $agg, bool $quietVerify = false)
     {
-        $centivService = new \App\Services\CentivService();
+        $banksRes = $agg->getBanks();
+        if (!$banksRes['success']) {
+            $this->whatsappService->sendMessage($from, "❌ Could not load bank list. Try again shortly.");
 
-        $this->whatsappService->sendMessage($from, "⏳ Processing withdrawal...");
+            return ['success' => false];
+        }
+        $banks = \App\Services\SendraCentiivRampService::normalizeBankList($banksRes['data']);
+        if ($banks === []) {
+            error_log('Centiiv getBanks returned no parseable banks: ' . json_encode($banksRes['data']));
+            $this->whatsappService->sendMessage($from, "❌ Bank list unavailable. Please try again later.");
 
-        // Step 1: Burn/transfer USDC from user's wallet to Sendra's settlement wallet
-        // (You'll need a settlement wallet address for this)
-        $settlementWallet = $_ENV['SENDRA_SETTLEMENT_WALLET'];
+            return ['success' => false];
+        }
+
+        $code = \App\Services\SendraCentiivRampService::resolveBankCode($bankNameGuess, $banks);
+        if ($code === null) {
+            $this->whatsappService->sendMessage(
+                $from,
+                "❌ Could not match *{$bankNameGuess}* to a bank.\nTry the official short name (e.g. *GTBank*, *Access*, *Opay*)."
+            );
+
+            return ['success' => false];
+        }
+
+        if (!$quietVerify) {
+            $this->whatsappService->sendMessage($from, '⏳ Checking your account…');
+        }
+
+        $verify = $agg->verifyBankAccount($code, $accountNumber);
+        if (!$verify['success']) {
+            $err = $verify['error'] ?? 'Verify failed';
+            $this->whatsappService->sendMessage(
+                $from,
+                "❌ Account could not be verified.\nCheck the 10 digits and bank name.\n({$err})"
+            );
+
+            return ['success' => false];
+        }
+
+        $vdata = $verify['data'];
+        $acctName = $this->centiivPickAccountName($vdata);
+
+        $userResolvedCode = \App\Services\SendraCentiivRampService::normalizeCentiivBankCode($code);
+        $resolved = \App\Services\SendraCentiivRampService::resolvedBankFromVerifyEnvelope(
+            is_array($vdata) ? $vdata : []
+        );
+        $mismatchNote = '';
+        if ($resolved !== null && $resolved['code'] !== '') {
+            if ($resolved['code'] !== $userResolvedCode) {
+                $mismatchNote = "\n\n\u{26A0}\u{FE0F} *Bank auto-corrected:* this account is with *"
+                    . ($resolved['name'] ?? 'the bank below')
+                    . '*, not *' . $bankNameGuess . '*. Payout will use the matched bank.';
+                error_log(
+                    'Sendra sell: verify bank differs from user guess; using resolved bankCode. '
+                    . json_encode(['wa' => $from, 'guess' => $bankNameGuess, 'user_code' => $userResolvedCode, 'resolved' => $resolved])
+                );
+            }
+            $code = $resolved['code'];
+            $bankDisplay = !empty($resolved['name'])
+                ? (string) $resolved['name']
+                : $this->centiivPickBankLabel($vdata, $banks, $code, $bankNameGuess);
+        } else {
+            $bankDisplay = $this->centiivPickBankLabel($vdata, $banks, $code, $bankNameGuess);
+        }
+
+        if ($acctName === null || $acctName === '') {
+            error_log('Centiiv verify missing account name: ' . json_encode($vdata));
+            $this->whatsappService->sendMessage($from, "❌ Verification incomplete. Try different details.");
+
+            return ['success' => false];
+        }
+
+        // Save verified payout details, then go straight to PIN (no extra “confirm/yes” step).
+        $ctx['account_number'] = $accountNumber;
+        $ctx['bank_code'] = $code;
+        $ctx['bank_name'] = $bankDisplay;
+        $ctx['account_name'] = $acctName;
+        $ctx['centiiv_verify_data'] = is_array($vdata) ? $vdata : null;
+        $this->setSellChatContext($from, $ctx);
+
+        return $this->sellCreateCentiivOrderAndQueuePin($from, $userRow, $ctx, $agg);
+    }
+
+    /**
+     * Centiiv Stellar USDC rail + 1Click Aptos → Stellar (no Centiiv Aptos deposit).
+     * Centiiv order uses USDC amount ≈ 1Click quoted output; metadata links correlation + deposit for support.
+     *
+     * @param array<string, mixed> $ctx
+     */
+    private function sellCreateOneClickCentiivOrderAndQueuePin($from, $userRow, array $ctx, \App\Services\SendraCentiivRampService $agg)
+    {
+        $asset = (string) ($ctx['asset'] ?? '');
+        $amountStr = (string) ($ctx['crypto_amount'] ?? '');
+        $amount = (float) $amountStr;
+        $acct = (string) ($ctx['account_number'] ?? '');
+        $code = (string) ($ctx['bank_code'] ?? '');
+        $name = (string) ($ctx['account_name'] ?? '');
+        $bankDisplay = (string) ($ctx['bank_name'] ?? '');
+
+        $stellarDeposit = trim((string) ($_ENV['SENDRA_CENTIIV_STELLAR_USDC_DEPOSIT'] ?? getenv('SENDRA_CENTIIV_STELLAR_USDC_DEPOSIT') ?: ''));
+        $originUsdt = trim((string) ($_ENV['SENDRA_ONECLICK_APTOS_USDT_ASSET_ID'] ?? getenv('SENDRA_ONECLICK_APTOS_USDT_ASSET_ID') ?: 'nep141:aptos-88cb7619440a914fe6400149a12b443c3ac21d59.omft.near'));
+        $originUsdc = trim((string) ($_ENV['SENDRA_ONECLICK_APTOS_USDC_ASSET_ID'] ?? getenv('SENDRA_ONECLICK_APTOS_USDC_ASSET_ID') ?: 'nep141:aptos-34ee497f210c5a511e8d5b53bc56d75b63612bb5.omft.near'));
+        $destStellarUsdc = trim((string) ($_ENV['SENDRA_ONECLICK_STELLAR_USDC_ASSET_ID'] ?? getenv('SENDRA_ONECLICK_STELLAR_USDC_ASSET_ID') ?: 'nep245:v2_1.omni.hot.tg:1100_111bzQBB65GxAPAVoxqmMcgYo5oS3txhqs1Uh1cgahKQUeTUq1TJu'));
+        $stellarOutDecimals = (int) ($_ENV['SENDRA_ONECLICK_STELLAR_USDC_DECIMALS'] ?? getenv('SENDRA_ONECLICK_STELLAR_USDC_DECIMALS') ?: 7);
+        $aptosTokenDecimals = 6;
+
+        $originAsset = $asset === 'USDC' ? $originUsdc : $originUsdt;
+        $refundAptos = trim((string) ($userRow['aptos_address'] ?? ''));
+        if ($refundAptos === '') {
+            $this->whatsappService->sendMessage($from, '❌ Missing Aptos address on your account. Contact support.');
+
+            return ['success' => false];
+        }
+
+        $deadlineTs = time() + 50 * 60;
+        $deadlineIso = gmdate('Y-m-d\TH:i:s\Z', $deadlineTs);
+        $amountSmallest = \App\Services\SendraOneClickService::cryptoAmountToSmallestUnits($amountStr, $aptosTokenDecimals);
+
+        $oneClick = new \App\Services\SendraOneClickService();
+
+        // 1) Dry quote to pooled Stellar rail — use prefetch if available to avoid extra 1Click calls.
+        $prefetched = isset($ctx['oneclick_dry_quote_data']) && is_array($ctx['oneclick_dry_quote_data'])
+            ? $ctx['oneclick_dry_quote_data']
+            : null;
+
+        if ($prefetched !== null) {
+            $this->oneClickOfframpLog('quote_dry_prefetched', $from, [
+                'amount_ledger' => $amountStr,
+                'origin_asset' => $asset,
+            ]);
+            $parsedDry = \App\Services\SendraOneClickService::parseQuoteResponse($prefetched);
+            $quoteDryRaw = $prefetched;
+        } else {
+            $quoteBodyDry = \App\Services\SendraOneClickService::buildAptosToStellarUsdcQuoteBody(
+                $originAsset,
+                $destStellarUsdc,
+                $amountSmallest,
+                $stellarDeposit,
+                $refundAptos,
+                $deadlineIso,
+                true
+            );
+            $this->oneClickOfframpLog('quote_dry_config', $from, [
+                'amount_ledger' => $amountStr,
+                'origin_asset' => $asset,
+                'origin_nep' => $originAsset,
+                'stellar_recipient' => $stellarDeposit,
+                'refund_aptos' => $refundAptos,
+                'deadline' => $deadlineIso,
+            ]);
+            $quoteDryRes = $oneClick->requestQuote($quoteBodyDry);
+            if (!$quoteDryRes['success']) {
+                $err = $quoteDryRes['error'] ?? '1Click dry quote failed';
+                error_log("Sendra 1Click dry quote failed {$from}: {$err} " . json_encode($quoteDryRes['data']));
+                $this->whatsappService->sendMessage(
+                    $from,
+                    "❌ Could not get a cross-chain quote right now.\n({$err})\n\nTry again in a minute or contact support@usesendra.com"
+                );
+
+                return ['success' => false];
+            }
+            $quoteDryRaw = $quoteDryRes['data'];
+            $parsedDry = \App\Services\SendraOneClickService::parseQuoteResponse($quoteDryRaw);
+        }
+        if ($parsedDry['correlation_id'] === null) {
+            $this->oneClickOfframpLog('quote_dry_parse_incomplete', $from, [
+                'parsed' => $parsedDry,
+            ]);
+            error_log('Sendra 1Click dry quote missing correlation: ' . json_encode($quoteDryRaw));
+            $this->whatsappService->sendMessage($from, '❌ Quote response incomplete. Please try again.');
+
+            return ['success' => false];
+        }
+
+        $usdcDrySmallest = $parsedDry['amount_out'] ?? '0';
+        $centiivUsdcAmount = (float) \App\Services\SendraOneClickService::smallestUnitsToFloatString((string) $usdcDrySmallest, $stellarOutDecimals);
+        if ($centiivUsdcAmount <= 0) {
+            $this->whatsappService->sendMessage($from, '❌ Invalid quoted USDC amount. Please try a different size.');
+
+            return ['success' => false];
+        }
+        $this->oneClickOfframpLog('quote_dry_ok', $from, [
+            'oneclick_correlation' => $parsedDry['correlation_id'],
+            'est_usdc_out_smallest' => $parsedDry['amount_out'] ?? null,
+        ]);
+
+        $publicBase = trim(
+            (string) (
+                $_ENV['SENDRA_PUBLIC_BASE_URL']
+                ?? getenv('SENDRA_PUBLIC_BASE_URL')
+                ?: ($_ENV['LOGISTICS_PUBLIC_BASE_URL'] ?? getenv('LOGISTICS_PUBLIC_BASE_URL') ?: '')
+            )
+        );
+
+        $rawBankRow = null;
+        $banksLookup = $agg->getBanks();
+        if ($banksLookup['success']) {
+            $rawBankRow = \App\Services\SendraCentiivRampService::findRawBankRowInBanksResponse($banksLookup['data'], $code);
+        }
+
+        $body = [
+            'fromAsset' => 'USDC',
+            'toAsset' => 'NGN',
+            'amount' => $centiivUsdcAmount,
+            'description' => 'Sendra WhatsApp sell ' . $from . ' (1Click dry ' . $parsedDry['correlation_id'] . ')',
+            'beneficiary' => \App\Services\SendraCentiivRampService::buildOfframpBeneficiaryWithVerify(
+                $acct,
+                $code,
+                $name,
+                $bankDisplay,
+                $rawBankRow,
+                isset($ctx['centiiv_verify_data']) && is_array($ctx['centiiv_verify_data']) ? $ctx['centiiv_verify_data'] : null,
+                \App\Services\SendraCentiivRampService::beneficiaryExternalIdFromWaPhone($from)
+            ),
+            'metadata' => [
+                'user_phone' => $from,
+                'source' => 'sendra_whatsapp',
+                'sendra_oneclick_correlation_id' => $parsedDry['correlation_id'],
+                'sendra_oneclick_quote_phase' => 'dry_pool_pricing',
+                'sendra_ledger_asset' => $asset,
+                'sendra_ledger_amount' => $amountStr,
+            ],
+        ];
+        $lp = trim((string) ($_ENV['SENDRA_CENTIIV_LIQUIDITY_PROVIDER'] ?? getenv('SENDRA_CENTIIV_LIQUIDITY_PROVIDER') ?: ''));
+        if ($lp !== '') {
+            $body['metadata']['liquidity_provider'] = $lp;
+        }
+        $refundStellar = trim((string) ($_ENV['SENDRA_CENTIIV_STELLAR_REFUND_ADDRESS'] ?? getenv('SENDRA_CENTIIV_STELLAR_REFUND_ADDRESS') ?: ''));
+        if ($refundStellar !== '' && strlen($refundStellar) >= 5 && $refundStellar[0] === 'G') {
+            $body['refundAddress'] = $refundStellar;
+        }
+        $webhookUrlOverride = trim(
+            (string) ($_ENV['SENDRA_CENTIIV_WEBHOOK_URL'] ?? getenv('SENDRA_CENTIIV_WEBHOOK_URL') ?: '')
+        );
+        if ($webhookUrlOverride !== '') {
+            $body['webhookUrl'] = $webhookUrlOverride;
+        } elseif ($publicBase !== '') {
+            $path = trim(
+                (string) ($_ENV['SENDRA_CENTIIV_WEBHOOK_PATH'] ?? getenv('SENDRA_CENTIIV_WEBHOOK_PATH') ?: 'CentiivWebhook.php'),
+                '/'
+            );
+            $body['webhookUrl'] = rtrim($publicBase, '/') . '/' . $path;
+        }
+
+        $created = $agg->createConversionOrder($body);
+        if (!$created['success']) {
+            $err = $created['error'] ?? 'Order failed';
+            error_log("Centiiv create order (1Click path) failed {$from}: {$err} " . json_encode($created['data']));
+            $this->whatsappService->sendMessage(
+                $from,
+                "❌ Could not open a conversion order. Please try again or contact support.\n({$err})"
+            );
+
+            return ['success' => false];
+        }
+
+        $data = $created['data'];
+        $orderId = \App\Services\SendraCentiivRampService::extractOrderId($data);
+        $orderIdHex = \App\Services\SendraCentiivRampService::extractOrderIdHex($data);
+
+        $orderStellar = \App\Services\SendraCentiivRampService::extractStellarDepositAddress(
+            is_array($data) ? $data : []
+        );
+        $allowPoolFallback = strtolower(trim((string) ($_ENV['SENDRA_ONECLICK_ALLOW_POOL_STELLAR_RECIPIENT'] ?? getenv('SENDRA_ONECLICK_ALLOW_POOL_STELLAR_RECIPIENT') ?: '')));
+        if (($orderStellar === null || $orderStellar === '') && $allowPoolFallback === '1' && $stellarDeposit !== '') {
+            $orderStellar = $stellarDeposit;
+            error_log('Sendra 1Click: Centiiv order missing Stellar pay-in; using SENDRA_CENTIIV_STELLAR_USDC_DEPOSIT (SENDRA_ONECLICK_ALLOW_POOL_STELLAR_RECIPIENT=1).');
+        }
+        if ($orderStellar === null || $orderStellar === '' || !\App\Services\SendraCentiivRampService::looksLikeStellarAccountId($orderStellar)) {
+            error_log('Sendra 1Click: no Stellar pay-in on Centiiv order for ' . $from . ' raw=' . json_encode($data));
+            error_log('Sendra sell: missing Stellar pay-in on order for ' . $from . ' orderId=' . (string) $orderId);
+            $this->whatsappService->sendMessage(
+                $from,
+                '❌ Could not start this payout. Nothing left your wallet. Contact support@usesendra.com'
+            );
+
+            return ['success' => false];
+        }
+
+        // 2) Live 1Click quote: recipient must be this order’s Stellar G so bridged USDC lands where Centiiv expects it.
+        $quoteBodyLive = \App\Services\SendraOneClickService::buildAptosToStellarUsdcQuoteBody(
+            $originAsset,
+            $destStellarUsdc,
+            $amountSmallest,
+            $orderStellar,
+            $refundAptos,
+            $deadlineIso,
+            false
+        );
+        $this->oneClickOfframpLog('quote_live_config', $from, [
+            'stellar_recipient' => $orderStellar,
+            'centiiv_order_id' => $orderId,
+        ]);
+        $quoteRes = $oneClick->requestQuote($quoteBodyLive);
+        if (!$quoteRes['success']) {
+            $err = $quoteRes['error'] ?? '1Click live quote failed';
+            error_log("Sendra 1Click live quote failed {$from}: {$err} " . json_encode($quoteRes['data']));
+            $this->whatsappService->sendMessage(
+                $from,
+                "❌ Could not lock the final quote. Nothing left your wallet.\nTry *sell* again or contact support@usesendra.com"
+            );
+
+            return ['success' => false];
+        }
+
+        $parsed = \App\Services\SendraOneClickService::parseQuoteResponse($quoteRes['data']);
+        if ($parsed['deposit_address'] === null || $parsed['correlation_id'] === null) {
+            $this->oneClickOfframpLog('quote_live_parse_incomplete', $from, ['parsed' => $parsed]);
+            error_log('Sendra 1Click live quote missing deposit or correlation: ' . json_encode($quoteRes['data']));
+            $this->whatsappService->sendMessage($from, '❌ Quote response incomplete. Please try selling again.');
+
+            return ['success' => false];
+        }
+
+        $usdcLiveSmallest = (string) ($parsed['amount_out'] ?? '0');
+        $slippageBps = (int) ($_ENV['SENDRA_ONECLICK_CENTIIV_SLIPPAGE_BPS'] ?? getenv('SENDRA_ONECLICK_CENTIIV_SLIPPAGE_BPS') ?: 200);
+        if ($slippageBps < 0 || $slippageBps > 5000) {
+            $slippageBps = 200;
+        }
+        if (ctype_digit($usdcDrySmallest) && ctype_digit($usdcLiveSmallest) && bccomp($usdcDrySmallest, '0', 0) > 0) {
+            $minLive = bcdiv(bcmul($usdcDrySmallest, (string) (10000 - $slippageBps), 0), '10000', 0);
+            if (bccomp($usdcLiveSmallest, $minLive, 0) < 0) {
+                $this->oneClickOfframpLog('quote_live_slippage_abort', $from, [
+                    'usdc_dry_smallest' => $usdcDrySmallest,
+                    'usdc_live_smallest' => $usdcLiveSmallest,
+                    'min_live_smallest' => $minLive,
+                    'centiiv_order_id' => $orderId,
+                ]);
+                $this->whatsappService->sendMessage(
+                    $from,
+                    '❌ The live rate moved too much before we could start. Nothing was sent — try *sell* again.'
+                );
+
+                return ['success' => false];
+            }
+        }
+
+        $this->oneClickOfframpLog('quote_live_ok', $from, [
+            'oneclick_deposit_aptos' => $parsed['deposit_address'],
+            'oneclick_correlation' => $parsed['correlation_id'],
+            'oneclick_memo' => $parsed['deposit_memo'] ?? null,
+            'est_usdc_out_smallest' => $parsed['amount_out'] ?? null,
+            'centiiv_stellar_payin' => $orderStellar,
+        ]);
+
+        $this->oneClickOfframpLog('centiiv_order_ok', $from, [
+            'centiiv_order_id' => $orderId,
+            'centiiv_order_id_hex' => $orderIdHex,
+            'usdc_quoted_for_order' => $centiivUsdcAmount,
+            'oneclick_correlation_dry' => $parsedDry['correlation_id'],
+            'oneclick_correlation_live' => $parsed['correlation_id'],
+            'centiiv_stellar_payin' => $orderStellar,
+        ]);
+
+        $quoteDeadline = null;
+        $rq = $quoteRes['data']['quote'] ?? null;
+        if (is_array($rq) && !empty($rq['deadline'])) {
+            $quoteDeadline = strtotime((string) $rq['deadline']);
+        }
+        $cap30 = time() + 30 * 60;
+        if ($quoteDeadline !== null && $quoteDeadline > time()) {
+            $expiresAt = min($cap30, $quoteDeadline);
+        } else {
+            $expiresAt = $cap30;
+        }
+
+        $pendingId = $this->storePendingTransaction([
+            'user_phone' => $from,
+            'tx_type' => 'offramp_oneclick_centiiv',
+            'amount' => $amountStr,
+            'currency' => $asset,
+            'recipient_address' => $parsed['deposit_address'],
+            'human_description' => json_encode([
+                'kind' => 'oneclick_centiiv_offramp',
+                'centiiv_order_id' => $orderId,
+                'receive_ngn_display' => $ctx['receive_ngn_display'] ?? null,
+                'account_name' => $name,
+                'account_number' => $acct,
+                'bank_name' => $ctx['bank_name'] ?? '',
+                'oneclick_correlation_id' => $parsed['correlation_id'],
+                'oneclick_correlation_id_dry' => $parsedDry['correlation_id'],
+                'centiiv_stellar_payin' => $orderStellar,
+                'oneclick_deposit_memo' => $parsed['deposit_memo'],
+                'oneclick_stellar_usdc_out' => $parsed['amount_out_formatted'],
+                'oneclick_quote_signature' => $parsed['signature'],
+                'centiiv_order_id_hex' => $orderIdHex,
+                'need_oneclick_poll' => false,
+            ], JSON_UNESCAPED_UNICODE),
+            'expires_at' => date('Y-m-d H:i:s', $expiresAt),
+        ]);
+
+        $this->userModel->setPendingTransaction($from, $pendingId);
+        $this->clearSellChatContext($from);
+
+        $recvNgn = (string) ($ctx['receive_ngn_display'] ?? '—');
+        $this->whatsappService->sendButtonMessage(
+            $from,
+            "🔐 *Enter your 6-digit PIN*\n\n" .
+            "*≈ ₦{$recvNgn}* payout to:\n*{$name}*\n`{$acct}` · *{$bankDisplay}*\n\n" .
+            "Wallet debit: *{$amountStr} {$asset}*\n\n" .
+            "Reply with your *PIN* to continue.",
+            ['cancel_' . $pendingId => 'Cancel']
+        );
+
+        return ['success' => true, 'action' => 'sell_pin_queued_oneclick'];
+    }
+
+    /**
+     * @param array<string, mixed> $ctx
+     */
+    private function sellCreateCentiivOrderAndQueuePin($from, $userRow, array $ctx, \App\Services\SendraCentiivRampService $agg)
+    {
+        if ($this->oneclickCentiivRampConfigured()) {
+            return $this->sellCreateOneClickCentiivOrderAndQueuePin($from, $userRow, $ctx, $agg);
+        }
+
+        $asset = (string) ($ctx['asset'] ?? '');
+        $amountStr = (string) ($ctx['crypto_amount'] ?? '');
+        $amount = (float) $amountStr;
+        $acct = (string) ($ctx['account_number'] ?? '');
+        $code = (string) ($ctx['bank_code'] ?? '');
+        $name = (string) ($ctx['account_name'] ?? '');
+        $bankDisplay = (string) ($ctx['bank_name'] ?? '');
+
+        $publicBase = trim(
+            (string) (
+                $_ENV['SENDRA_PUBLIC_BASE_URL']
+                ?? getenv('SENDRA_PUBLIC_BASE_URL')
+                ?: ($_ENV['LOGISTICS_PUBLIC_BASE_URL'] ?? getenv('LOGISTICS_PUBLIC_BASE_URL') ?: '')
+            )
+        );
+
+        $rawBankRow = null;
+        $banksLookup = $agg->getBanks();
+        if ($banksLookup['success']) {
+            $rawBankRow = \App\Services\SendraCentiivRampService::findRawBankRowInBanksResponse($banksLookup['data'], $code);
+        }
+
+        $body = [
+            'fromAsset' => $asset,
+            'toAsset' => 'NGN',
+            'amount' => $amount,
+            'description' => 'Sendra WhatsApp sell ' . $from,
+            'beneficiary' => \App\Services\SendraCentiivRampService::buildOfframpBeneficiaryWithVerify(
+                $acct,
+                $code,
+                $name,
+                $bankDisplay,
+                $rawBankRow,
+                isset($ctx['centiiv_verify_data']) && is_array($ctx['centiiv_verify_data']) ? $ctx['centiiv_verify_data'] : null,
+                \App\Services\SendraCentiivRampService::beneficiaryExternalIdFromWaPhone($from)
+            ),
+            'metadata' => [
+                'user_phone' => $from,
+                'source' => 'sendra_whatsapp',
+            ],
+        ];
+        $lp = trim((string) ($_ENV['SENDRA_CENTIIV_LIQUIDITY_PROVIDER'] ?? getenv('SENDRA_CENTIIV_LIQUIDITY_PROVIDER') ?: ''));
+        if ($lp !== '') {
+            $body['metadata']['liquidity_provider'] = $lp;
+        }
+        $webhookUrlOverride = trim(
+            (string) ($_ENV['SENDRA_CENTIIV_WEBHOOK_URL'] ?? getenv('SENDRA_CENTIIV_WEBHOOK_URL') ?: '')
+        );
+        if ($webhookUrlOverride !== '') {
+            $body['webhookUrl'] = $webhookUrlOverride;
+        } elseif ($publicBase !== '') {
+            $path = trim(
+                (string) ($_ENV['SENDRA_CENTIIV_WEBHOOK_PATH'] ?? getenv('SENDRA_CENTIIV_WEBHOOK_PATH') ?: 'CentiivWebhook.php'),
+                '/'
+            );
+            $body['webhookUrl'] = rtrim($publicBase, '/') . '/' . $path;
+        }
+
+        $created = $agg->createConversionOrder($body);
+        if (!$created['success']) {
+            $err = $created['error'] ?? 'Order failed';
+            error_log("Centiiv create order failed {$from}: {$err} " . json_encode($created['data']));
+            $this->whatsappService->sendMessage(
+                $from,
+                "❌ Could not open a conversion order. Please try again or contact support.\n({$err})"
+            );
+
+            return ['success' => false];
+        }
+
+        $data = $created['data'];
+        $deposit = \App\Services\SendraCentiivRampService::extractAptosDepositAddress($data);
+        $orderId = \App\Services\SendraCentiivRampService::extractOrderId($data);
+
+        if ($deposit === null || $deposit === '') {
+            error_log('Centiiv create order: no Aptos deposit address in payload for ' . $from . ' raw=' . json_encode($data));
+            $this->whatsappService->sendMessage(
+                $from,
+                "⚠️ Something went wrong reading your deposit details.\nContact support@usesendra.com with your phone number."
+            );
+            $this->clearSellChatContext($from);
+
+            return ['success' => false];
+        }
+
+        $pendingId = $this->storePendingTransaction([
+            'user_phone' => $from,
+            'tx_type' => 'offramp_centiiv',
+            'amount' => $amountStr,
+            'currency' => $asset,
+            'recipient_address' => $deposit,
+            'human_description' => json_encode([
+                'kind' => 'centiiv_offramp',
+                'order_id' => $orderId,
+                'receive_ngn_display' => $ctx['receive_ngn_display'] ?? null,
+                'account_name' => $name,
+                'account_number' => $acct,
+                'bank_name' => $ctx['bank_name'] ?? '',
+            ], JSON_UNESCAPED_UNICODE),
+            'expires_at' => date('Y-m-d H:i:s', time() + 30 * 60),
+        ]);
+
+        $this->userModel->setPendingTransaction($from, $pendingId);
+        $this->clearSellChatContext($from);
+
+        $recvNgn = (string) ($ctx['receive_ngn_display'] ?? '—');
+        $this->whatsappService->sendButtonMessage(
+            $from,
+            "🔐 *Enter your 6-digit PIN*\n\n" .
+            "*≈ ₦{$recvNgn}* payout to:\n*{$name}*\n`{$acct}` · *{$bankDisplay}*\n\n" .
+            "Wallet debit: *{$amountStr} {$asset}*\n\n" .
+            "Deposit:\n`{$deposit}`\n\n" .
+            "Reply with your *PIN* to continue.",
+            ['cancel_' . $pendingId => 'Cancel']
+        );
+
+        return ['success' => true, 'action' => 'sell_pin_queued'];
+    }
+
+    /**
+     * @param array<string, mixed> $pending
+     */
+    private function executeCentiivOneClickOfframpTransfer($from, $user, $pending)
+    {
+        $this->oneClickOfframpLog('execute_begin', $from, [
+            'pending_id' => (string) ($pending['id'] ?? ''),
+            'tx_type' => (string) ($pending['tx_type'] ?? ''),
+            'amount' => (string) ($pending['amount'] ?? ''),
+            'currency' => (string) ($pending['currency'] ?? ''),
+            'oneclick_deposit_aptos' => (string) ($pending['recipient_address'] ?? ''),
+            'sender_aptos' => (string) ($user['aptos_address'] ?? ''),
+        ]);
+        $this->whatsappService->sendMessage($from, "⏳ Sending {$pending['amount']} {$pending['currency']} from your wallet…");
+
+        $ch = curl_init('http://127.0.0.1:3001/transactions/execute-gasless');
+        curl_setopt_array($ch, [
+            CURLOPT_POST => true,
+            CURLOPT_POSTFIELDS => json_encode([
+                'sender_address' => $user['aptos_address'],
+                'encrypted_private_key' => $user['encrypted_private_key'],
+                'recipient' => $pending['recipient_address'],
+                'amount' => $pending['amount'],
+                'currency' => $pending['currency'],
+            ]),
+            CURLOPT_HTTPHEADER => $this->aptosServiceAuthHeaders(),
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT => 45,
+        ]);
+        $rawResponse = curl_exec($ch);
+        $curlNo = (int) curl_errno($ch);
+        $curlErr = $curlNo ? curl_error($ch) : null;
+        $httpAptos = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        $result = json_decode((string) $rawResponse, true);
+        if ($curlNo) {
+            $this->oneClickOfframpLog('aptos_curl_error', $from, [
+                'pending_id' => (string) ($pending['id'] ?? ''),
+                'http' => $httpAptos,
+                'curl_errno' => $curlNo,
+                'curl_error' => $curlErr,
+            ]);
+            error_log('aptos-service oneclick offramp curl: ' . (string) $curlErr);
+        }
+
+        $this->userModel->clearPendingTransaction($from);
+
+        $meta = json_decode($pending['human_description'] ?? '{}', true) ?: [];
+        $correlation = (string) ($meta['oneclick_correlation_id'] ?? '');
+        $depositMemo = isset($meta['oneclick_deposit_memo']) && is_string($meta['oneclick_deposit_memo']) && $meta['oneclick_deposit_memo'] !== ''
+            ? $meta['oneclick_deposit_memo'] : null;
+        $this->oneClickOfframpLog('context_after_aptos_call', $from, [
+            'pending_id' => (string) ($pending['id'] ?? ''),
+            'oneclick_correlation' => $correlation,
+            'oneclick_memo_set' => $depositMemo !== null,
+            'centiiv_order_id' => $meta['centiiv_order_id'] ?? null,
+            'centiiv_order_id_hex' => $meta['centiiv_order_id_hex'] ?? null,
+            'aptos_service_http' => $httpAptos,
+        ]);
+
+        if (empty($result['success'])) {
+            $this->updatePendingTransactionStatus($pending['id'], 'failed');
+            $err = is_array($result) ? ($result['error'] ?? 'Unknown error') : 'Service error';
+            $this->oneClickOfframpLog('aptos_execute_failed', $from, [
+                'pending_id' => (string) ($pending['id'] ?? ''),
+                'error' => (string) $err,
+                'http' => $httpAptos,
+                'result_preview' => is_string($rawResponse) ? (strlen($rawResponse) > 1200 ? (substr($rawResponse, 0, 1200) . '…') : $rawResponse) : null,
+            ]);
+            error_log("1Click offramp aptos send failed {$from}: {$err} raw={$rawResponse}");
+            $this->whatsappService->sendMessage(
+                $from,
+                "❌ Could not send crypto: {$err}\n\nYour balance is unchanged. Try again or contact support."
+            );
+
+            return ['success' => false];
+        }
+
+        $hash = (string) $result['tx_hash'];
+        $explorerUrl = $this->aptosExplorerUrlForTransaction(is_array($result) ? $result : [], $hash);
+        $this->oneClickOfframpLog('aptos_tx_confirmed', $from, [
+            'pending_id' => (string) ($pending['id'] ?? ''),
+            'tx_hash' => $hash,
+            'explorer_url' => $explorerUrl,
+            'oneclick_correlation' => $correlation,
+            'http' => $httpAptos,
+        ]);
+        $this->updatePendingTransactionStatus($pending['id'], 'confirmed', $hash);
+        $this->recordTransaction([
+            'user_phone' => $from,
+            'direction' => 'out',
+            'amount' => $pending['amount'],
+            'currency' => $pending['currency'],
+            'status' => 'confirmed',
+            'aptos_address' => $user['aptos_address'],
+            'counterparty' => $pending['recipient_address'],
+            'tx_hash' => $hash,
+            'explorer_url' => $explorerUrl,
+        ]);
+
+        $this->mergePendingTransactionHumanDescription($pending['id'], [
+            'aptos_funding_tx_hash' => $hash,
+            'need_oneclick_poll' => true,
+        ]);
+
+        $oneClick = new \App\Services\SendraOneClickService();
+        $submit = $oneClick->submitDeposit($pending['recipient_address'], $hash, $depositMemo);
+        $this->oneClickOfframpLog('deposit_submit_result', $from, [
+            'pending_id' => (string) ($pending['id'] ?? ''),
+            'ok' => (bool) ($submit['success'] ?? false),
+            'http' => (int) ($submit['http_code'] ?? 0),
+            'error' => (string) ($submit['error'] ?? ''),
+        ]);
+        if (!$submit['success']) {
+            error_log('1Click deposit/submit (non-fatal): ' . ($submit['error'] ?? '') . ' ' . json_encode($submit['data']));
+        }
+
+        $swapDone = false;
+        for ($i = 0; $i < 8; $i++) {
+            if ($i > 0) {
+                sleep(2);
+            }
+            $st = $oneClick->getStatus($pending['recipient_address'], $depositMemo);
+            if (!$st['success']) {
+                $this->oneClickOfframpLog('status_poll_stopped', $from, [
+                    'pending_id' => (string) ($pending['id'] ?? ''),
+                    'iteration' => $i,
+                    'error' => (string) ($st['error'] ?? ''),
+                    'http' => (int) ($st['http_code'] ?? 0),
+                ]);
+                break;
+            }
+            $code = \App\Services\SendraOneClickService::parseStatus($st['data']);
+            $stSummary = is_array($st['data'] ?? null) ? (strlen($sj = (string) json_encode($st['data'], JSON_UNESCAPED_UNICODE)) > 1800 ? substr($sj, 0, 1800) . '…' : $sj) : '';
+            $this->oneClickOfframpLog('status_poll', $from, [
+                'pending_id' => (string) ($pending['id'] ?? ''),
+                'iteration' => $i,
+                'oneclick_status' => $code,
+                'oneclick_correlation' => $correlation,
+                'data_summary' => $stSummary,
+            ]);
+            if ($code === 'SUCCESS') {
+                $swapDone = true;
+                break;
+            }
+            if (in_array($code, ['FAILED', 'REFUNDED'], true)) {
+                $this->oneClickOfframpLog('oneclick_swap_terminal', $from, [
+                    'pending_id' => (string) ($pending['id'] ?? ''),
+                    'code' => $code,
+                    'oneclick_correlation' => $correlation,
+                ]);
+                error_log("1Click swap terminal {$code} for {$from} correlation={$correlation}");
+                break;
+            }
+        }
+        $this->oneClickOfframpLog('post_poll_summary', $from, [
+            'pending_id' => (string) ($pending['id'] ?? ''),
+            'swap_done' => $swapDone,
+            'oneclick_correlation' => $correlation,
+        ]);
+
+        $ngn = $meta['receive_ngn_display'] ?? '—';
+        $acct = $meta['account_name'] ?? '';
+        $centiivOrder = isset($meta['centiiv_order_id']) && is_string($meta['centiiv_order_id']) && $meta['centiiv_order_id'] !== ''
+            ? $meta['centiiv_order_id'] : null;
+        $centiivHex = isset($meta['centiiv_order_id_hex']) && is_string($meta['centiiv_order_id_hex']) && $meta['centiiv_order_id_hex'] !== ''
+            ? $meta['centiiv_order_id_hex'] : null;
+        if ($centiivOrder !== null) {
+            error_log("Sendra sell offramp context {$from} order={$centiivOrder}" . ($centiivHex !== null ? " hex={$centiivHex}" : '') . " correlation={$correlation}");
+        }
+
+        if ($swapDone) {
+            $this->mergePendingTransactionHumanDescription($pending['id'], [
+                'need_oneclick_poll' => false,
+                'oneclick_swap_status' => 'SUCCESS',
+                'oneclick_bridge_user_notified' => true,
+            ]);
+            $this->whatsappService->sendMessage(
+                $from,
+                "✅ *Sent* — swap complete\n\n" .
+                "Explorer: {$explorerUrl}\n\n" .
+                "Your *≈ ₦{$ngn}* payout to *{$acct}* is processing. We’ll update you when the bank transfer finishes."
+            );
+        } else {
+            $this->whatsappService->sendMessage(
+                $from,
+                "✅ *Sent from wallet*\n\n" .
+                "Explorer: {$explorerUrl}\n\n" .
+                "⏳ Finalizing exchange (usually a few minutes). Your *≈ ₦{$ngn}* payout starts right after."
+            );
+        }
+
+        return ['success' => true];
+    }
+
+    /**
+     * @param array<string, mixed> $pending
+     */
+    private function executeCentiivOfframpTransfer($from, $user, $pending)
+    {
+        $this->whatsappService->sendMessage($from, "⏳ Sending {$pending['amount']} {$pending['currency']}…");
 
         $ch = curl_init('http://127.0.0.1:3001/transactions/execute');
         curl_setopt_array($ch, [
@@ -1381,84 +3260,224 @@ class MessageController
             CURLOPT_POSTFIELDS => json_encode([
                 'sender_address' => $user['aptos_address'],
                 'encrypted_private_key' => $user['encrypted_private_key'],
-                'recipient' => $settlementWallet,
-                'amount' => $pending['crypto_amount'],
-                'currency' => $pending['currency']
+                'recipient' => $pending['recipient_address'],
+                'amount' => $pending['amount'],
+                'currency' => $pending['currency'],
             ]),
-            CURLOPT_HTTPHEADER => [
-                'Content-Type: application/json',
-                'X-Internal-Secret: ' . $_ENV['INTERNAL_API_SECRET']
-            ],
+            CURLOPT_HTTPHEADER => $this->aptosServiceAuthHeaders(),
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT => 30
+            CURLOPT_TIMEOUT => 45,
         ]);
-        $burnResult = json_decode(curl_exec($ch), true);
+        $rawResponse = curl_exec($ch);
+        if (curl_errno($ch)) {
+            error_log('aptos-service offramp curl: ' . curl_error($ch));
+        }
+        curl_close($ch);
+        $result = json_decode((string) $rawResponse, true);
+
+        $this->userModel->clearPendingTransaction($from);
+
+        if (!empty($result['success'])) {
+            $hash = (string) $result['tx_hash'];
+            $explorerUrl = $this->aptosExplorerUrlForTransaction(is_array($result) ? $result : [], $hash);
+            $this->updatePendingTransactionStatus($pending['id'], 'confirmed', $hash);
+            $meta = json_decode($pending['human_description'] ?? '{}', true) ?: [];
+            $this->recordTransaction([
+                'user_phone' => $from,
+                'direction' => 'out',
+                'amount' => $pending['amount'],
+                'currency' => $pending['currency'],
+                'status' => 'confirmed',
+                'aptos_address' => $user['aptos_address'],
+                'counterparty' => $pending['recipient_address'],
+                'tx_hash' => $hash,
+                'explorer_url' => $explorerUrl,
+            ]);
+
+            $ngn = $meta['receive_ngn_display'] ?? '—';
+            $acct = $meta['account_name'] ?? '';
+            $this->whatsappService->sendMessage(
+                $from,
+                "✅ *Crypto sent*\n\n" .
+                "Sent: *{$pending['amount']} {$pending['currency']}*\n" .
+                "Explorer: {$explorerUrl}\n\n" .
+                "⏳ Your bank payout (*≈ ₦{$ngn}* to *{$acct}*) will complete after deposit confirmation.\n" .
+                "We’ll message you when it’s done."
+            );
+
+            return ['success' => true];
+        }
+
+        $this->updatePendingTransactionStatus($pending['id'], 'failed');
+        $err = is_array($result) ? ($result['error'] ?? 'Unknown error') : 'Service error';
+        error_log("Centiiv offramp chain send failed {$from}: {$err} raw={$rawResponse}");
+        $this->whatsappService->sendMessage(
+            $from,
+            "❌ Could not send crypto: {$err}\n\nYour balance is unchanged. Try again or contact support."
+        );
+
+        return ['success' => false];
+    }
+
+    /**
+     * @param array<string, mixed> $vdata
+     */
+    private function centiivPickAccountName(array $vdata): ?string
+    {
+        $d = $vdata['data'] ?? $vdata;
+        if (!is_array($d)) {
+            $d = $vdata;
+        }
+        foreach (['accountName', 'account_name', 'accountHolderName', 'name'] as $k) {
+            if (!empty($d[$k]) && is_string($d[$k])) {
+                return $d[$k];
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param list<array{code: string, name: string}> $banks
+     */
+    private function centiivPickBankLabel(array $vdata, array $banks, string $code, string $fallbackGuess): string
+    {
+        $d = $vdata['data'] ?? $vdata;
+        if (is_array($d)) {
+            foreach (['bankName', 'bank_name'] as $k) {
+                if (!empty($d[$k]) && is_string($d[$k])) {
+                    return $d[$k];
+                }
+            }
+            if (isset($d['bank']) && is_string($d['bank']) && $d['bank'] !== '') {
+                return $d['bank'];
+            }
+            if (isset($d['bank']) && is_array($d['bank'])) {
+                $bk = $d['bank'];
+                foreach (['bankName', 'name', 'longName', 'shortName'] as $k) {
+                    if (!empty($bk[$k]) && is_string($bk[$k])) {
+                        return $bk[$k];
+                    }
+                }
+            }
+        }
+        foreach ($banks as $b) {
+            if ($b['code'] === $code) {
+                return $b['name'];
+            }
+        }
+
+        return $fallbackGuess;
+    }
+
+    /**
+     * 1Click offramp + Centiiv prepare → see php-debug.log when error_log and SENDRA_PHP_ERROR_LOG point to it. Disable: SENDRA_1CLICK_TRACE=0.
+     *
+     * @param array<string, mixed> $context
+     */
+    private function oneClickOfframpLog(string $step, string $from, array $context = []): void
+    {
+        if (!$this->oneClickOfframpTraceEnabled()) {
+            return;
+        }
+        $context['step'] = $step;
+        $context['user'] = $from;
+        $context['ts'] = date('c');
+        error_log('[Sendra 1Click offramp] ' . json_encode($context, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+    }
+
+    private function oneClickOfframpTraceEnabled(): bool
+    {
+        $v = strtolower(trim((string) ($_ENV['SENDRA_1CLICK_TRACE'] ?? getenv('SENDRA_1CLICK_TRACE') ?: '')));
+        if ($v === '') {
+            return true;
+        }
+
+        return !in_array($v, ['0', 'false', 'no', 'off'], true);
+    }
+
+    /**
+     * Must match aptos-service INTERNAL_API_SECRET (trimmed to survive stray newlines in .env).
+     *
+     * @return list<string>
+     */
+    private function aptosServiceAuthHeaders(): array
+    {
+        $secret = trim((string) ($_ENV['INTERNAL_API_SECRET'] ?? getenv('INTERNAL_API_SECRET') ?: ''));
+
+        return [
+            'Content-Type: application/json',
+            'X-Internal-Secret: ' . $secret,
+        ];
+    }
+
+    /**
+     * Executes an arbitrary entry-function call via aptos-service SmoothSend gasless (Method 2).
+     *
+     * @param array<string, mixed> $payload
+     * @return array<string, mixed>
+     */
+    private function aptosServiceExecuteGasless(array $payload): array
+    {
+        $ch = curl_init('http://127.0.0.1:3001/transactions/execute-gasless');
+        curl_setopt_array($ch, [
+            CURLOPT_POST           => true,
+            CURLOPT_POSTFIELDS     => json_encode($payload),
+            CURLOPT_HTTPHEADER     => $this->aptosServiceAuthHeaders(),
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT        => 30,
+        ]);
+
+        $curlError = null;
+        $rawResponse = curl_exec($ch);
+        if (curl_errno($ch)) {
+            $curlError = curl_error($ch);
+            error_log("aptos-service execute-gasless curl error: $curlError");
+        }
         curl_close($ch);
 
-        if (empty($burnResult['success'])) {
-            $this->whatsappService->sendMessage(
-                $from,
-                "❌ Blockchain transaction failed. Your funds are safe.\n\n" .
-                "Please try again or contact support."
-            );
-            return ['success' => false];
+        $decoded = json_decode((string) $rawResponse, true);
+        if (!is_array($decoded)) {
+            return [
+                'success' => false,
+                'error'   => $curlError ? 'Service unreachable' : 'Invalid response from aptos-service',
+                'raw'     => (string) $rawResponse,
+            ];
+        }
+        return $decoded;
+    }
+
+    /**
+     * Prefer `explorer_url` from aptos-service POST /transactions/execute (same network the tx was built on).
+     * Fallback: APTOS_EXPLORER_NETWORK (default mainnet) — set to testnet for testnet users.
+     *
+     * @param array<string, mixed> $executeResult
+     */
+    private function aptosExplorerUrlForTransaction(array $executeResult, string $txHash): string
+    {
+        $u = $executeResult['explorer_url'] ?? null;
+        if (is_string($u) && $u !== '') {
+            return $u;
         }
 
-        $txHash = $burnResult['tx_hash'];
+        return $this->aptosExplorerTxnUrl($txHash);
+    }
 
-        // Step 2: Create Centiv order
-        $orderRef = 'SENDRA_' . bin2hex(random_bytes(8));
-        
-        $orderResult = $centivService->createOfframpOrder([
-            'currency' => $pending['currency'],
-            'crypto_amount' => $pending['crypto_amount'],
-            'fiat_amount' => $pending['amount_naira'],
-            'account_number' => $pending['account_number'],
-            'account_name' => $pending['account_name'],
-            'bank_code' => $pending['bank_code'],
-            'customer_phone' => $from,
-            'reference' => $orderRef
-        ]);
-
-        if (!$orderResult['success']) {
-            // Order failed but crypto already sent - needs manual reconciliation
-            error_log("CRITICAL: Offramp crypto sent but Centiv order failed | user=$from tx=$txHash");
-            
-            $this->whatsappService->sendMessage(
-                $from,
-                "⚠️ Payment processing issue detected.\n\n" .
-                "Your crypto has been secured. Our team will complete your transfer within 24 hours.\n\n" .
-                "Reference: {$orderRef}\n" .
-                "Support: support@usesendra.com"
-            );
-            
-            return ['success' => false, 'needs_reconciliation' => true];
+    private function aptosExplorerTxnUrl(string $txHash): string
+    {
+        $net = strtoupper(trim((string) ($_ENV['APTOS_EXPLORER_NETWORK'] ?? getenv('APTOS_EXPLORER_NETWORK') ?: 'MAINNET')));
+        $base = 'https://explorer.aptoslabs.com/txn/' . ltrim($txHash, " \t\n\r\0\x0B");
+        if ($net === 'MAINNET' || $net === '') {
+            return $base;
+        }
+        if ($net === 'TESTNET') {
+            return $base . '?network=testnet';
+        }
+        if ($net === 'DEVNET') {
+            return $base . '?network=devnet';
         }
 
-        // Success!
-        $receiptUrl = $orderResult['receipt_url'];
-        
-        $this->updatePendingOfframpStatus($pending['id'], 'completed', $txHash, $orderResult['order_id']);
-
-        $message = "✅ *Withdrawal Successful!*\n\n" .
-            "💸 ₦{$pending['amount_naira']} sent to:\n" .
-            "*{$pending['account_name']}*\n" .
-            "{$pending['account_number']} ({$pending['bank_name']})\n\n" .
-            "📊 *Transaction Details:*\n" .
-            "USDC Spent: {$pending['crypto_amount']}\n" .
-            "Rate: ₦{$pending['rate']}/USDC\n" .
-            "Fee: ₦{$pending['fee']}\n\n" .
-            "🔗 Blockchain: https://explorer.aptoslabs.com/txn/{$txHash}?network=testnet\n";
-
-        if ($receiptUrl) {
-            $message .= "📄 Receipt: {$receiptUrl}\n";
-        }
-
-        $message .= "\n⏱️ Funds should arrive within 5-10 minutes.";
-
-        $this->whatsappService->sendMessage($from, $message);
-
-        return ['success' => true];
+        return $base;
     }
 
 }

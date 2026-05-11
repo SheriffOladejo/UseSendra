@@ -14,6 +14,9 @@
 *.log
 logs/
 
+# Runtime health cache (from cron_ramp_health.php)
+var/ramp_health.json
+
 # OS
 .DS_Store
 Thumbs.db

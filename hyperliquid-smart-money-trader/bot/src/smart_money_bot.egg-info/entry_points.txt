@@ -1,0 +1,2 @@
+[console_scripts]
+smart-money-backtest = smart_money_bot.backtest:main

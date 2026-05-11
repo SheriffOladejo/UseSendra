@@ -6,17 +6,11 @@ const express_1 = require("express");
 const ts_sdk_1 = require("@aptos-labs/ts-sdk");
 const aptosClient_js_1 = require("../services/aptosClient.js");
 const keyManager_js_1 = require("../services/keyManager.js");
+const internalSecretAuth_js_1 = require("../middleware/internalSecretAuth.js");
+const aptosAssets_js_1 = require("../config/aptosAssets.js");
 const router = (0, express_1.Router)();
 exports.accountRoutes = router;
-// ─── Middleware: verify internal secret ───────────────────────────────────────
-router.use((req, res, next) => {
-    const secret = req.headers['x-internal-secret'];
-    if (secret !== process.env.INTERNAL_API_SECRET) {
-        res.status(401).json({ success: false, error: 'Unauthorized' });
-        return;
-    }
-    next();
-});
+router.use(internalSecretAuth_js_1.requireInternalSecret);
 // ─── POST /accounts/create ────────────────────────────────────────────────────
 /**
  * Generates a new Aptos account for a user.
@@ -68,10 +62,15 @@ router.post('/balance', async (req, res) => {
         res.status(400).json({ success: false, error: 'aptos_address is required' });
         return;
     }
-    const ASSET_METADATA = {
-        USDC: '0x69091fbab5f7d635ee7ac5098cf0c1efbe31d68fec0f2cd565e8d168daf52832',
-        USDT: '0x5724aca06f8bd505e9eaf2337d16d6fc310c96ecfd331269bf2f76840d3f355a',
-    };
+    const usdcMeta = (0, aptosAssets_js_1.metadataForSymbol)('USDC');
+    const usdtMeta = (0, aptosAssets_js_1.metadataForSymbol)('USDT');
+    if (!usdcMeta || !usdtMeta) {
+        res.status(500).json({
+            success: false,
+            error: 'USDC/USDT metadata not configured for APTOS_NETWORK (set APTOS_NETWORK or metadata env overrides).',
+        });
+        return;
+    }
     try {
         // APT balance
         let aptRaw = 0;
@@ -102,8 +101,8 @@ router.post('/balance', async (req, res) => {
             }
         };
         const [usdcRaw, usdtRaw] = await Promise.all([
-            getFaBalance(ASSET_METADATA.USDC),
-            getFaBalance(ASSET_METADATA.USDT),
+            getFaBalance(usdcMeta),
+            getFaBalance(usdtMeta),
         ]);
         res.json({
             success: true,

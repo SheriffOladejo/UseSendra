@@ -39,7 +39,7 @@ $query = $db->query("
     FROM whatsapp_sessions ws
     LEFT JOIN drivers d ON d.phone = ws.phone_number
     WHERE ws.current_step IS NOT NULL
-    AND ws.current_step NOT IN ('rider_ready','in_review','rider_approved')
+    AND ws.current_step NOT IN ('rider_ready','rider_approved')
 ");
 
 $stepsMap = [

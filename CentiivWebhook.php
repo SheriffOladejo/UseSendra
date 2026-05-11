@@ -1,16 +1,21 @@
 <?php
 
 /**
- * Centiiv → Svix webhooks for logistics driver acceptance (Direct Pay).
+ * Centiiv → single HTTPS endpoint (Svix / HMAC).
  *
- * Handles `payment.successful` as documented for Centiiv on Svix:
- * @see https://www.svix.com/event-types/eu/org_2yieL70Sd2Iom1IBeqNlEWvzRoX/#disbursement.status
+ * 1) **Logistics** — Direct Pay `payment.successful` (driver acceptance fee).
+ * 2) **Sendra Aptos** — liquidity API (`api.centiiv.io`) sends **`event_type`** payloads such as
+ *    `request.completed` and `settlement.completed` (often **without** `metadata` in the POST body).
+ *    We load full order details via `GET /requests/{requestId}` and notify when it is a Sendra order
+ *    (`metadata.source === sendra_whatsapp`). Merchant/Svix **`disbursement.status`** is also supported
+ *    when metadata is present ([catalog](https://www.svix.com/event-types/eu/org_2yieL70Sd2Iom1IBeqNlEWvzRoX/)).
  *
- * Set CENTIIV_WEBHOOK_SECRET to your Svix endpoint signing secret (whsec_…).
- * Centiiv webhook consumption follows Svix: https://docs.svix.com/receiving/introduction
+ * One URL in Centiiv (e.g. https://coinectra.stipendly.app/CentiivWebhook.php) can serve both.
+ * Svix signing: Centiiv **Protocol** (aggregate / `api.centiiv.io` events) and **Payment** (Direct Pay, etc.)
+ * are separate portal tabs — each endpoint has its **own** `whsec_`. We try every configured `whsec_` until one
+ * verifies ({@see centiiv_webhook_collect_svix_secrets()}).
  *
- * IMPORTANT: Endpoint URL must be this file (e.g. …/CentiivWebhook.php), NOT PaystackWebhook.php
- * (Paystack returns 401 Invalid signature for Svix-signed Centiiv payloads).
+ * @see https://docs.svix.com/receiving/introduction
  */
 
 error_reporting(E_ALL);
@@ -29,10 +34,14 @@ use App\Models\LogisticsDriver;
 use App\Models\LogisticsUser;
 use App\Services\CentiivDirectPayService;
 use App\Services\LogisticsAfterDriverFeePaidService;
+use App\Services\SendraCentiivRampService;
+use App\Services\SendraCentiivPayoutReceiptFactory;
+use App\Services\SendraPayoutReceiptImageService;
 use App\Services\SvixWebhookVerifier;
 use App\Services\WhatsAppService;
 
 $logisticsPhoneId = $_ENV['WHATSAPP_LOGISTICS_PHONE_NUMBER_ID'] ?? getenv('WHATSAPP_LOGISTICS_PHONE_NUMBER_ID') ?: '1097784993409171';
+$aptosPhoneId = $_ENV['WHATSAPP_APTOS_PHONE_NUMBER_ID'] ?? getenv('WHATSAPP_APTOS_PHONE_NUMBER_ID') ?: '851265871413834';
 
 $db = Database::getInstance($bots[$logisticsPhoneId]['db_config'], false)->getConnection();
 
@@ -48,10 +57,20 @@ $event = json_decode($payload, true);
 
 error_log('CENTIIV WEBHOOK: ' . $payload);
 
-$webhookSecret = trim((string) ($_ENV['CENTIIV_WEBHOOK_SECRET'] ?? getenv('CENTIIV_WEBHOOK_SECRET') ?: ''));
-if ($webhookSecret !== '') {
-    if (str_starts_with($webhookSecret, 'whsec_')) {
-        if (!SvixWebhookVerifier::verify($payload, $webhookSecret)) {
+$svixSecrets = centiiv_webhook_collect_svix_secrets();
+$legacyWebhookSecret = centiiv_webhook_first_legacy_webhook_secret();
+$webhookSigningConfigured = $svixSecrets !== [] || $legacyWebhookSecret !== '';
+
+$allowUnsigned = strtolower(trim((string) ($_ENV['CENTIIV_WEBHOOK_ALLOW_UNSIGNED'] ?? getenv('CENTIIV_WEBHOOK_ALLOW_UNSIGNED') ?: '')));
+$allowUnsigned = in_array($allowUnsigned, ['1', 'true', 'yes'], true);
+if ($webhookSigningConfigured && $allowUnsigned) {
+    error_log('CENTIIV WEBHOOK: CENTIIV_WEBHOOK_ALLOW_UNSIGNED is on — signature check skipped (use only for mock/curl tests, never in production)');
+}
+if ($webhookSigningConfigured && !$allowUnsigned) {
+    if ($svixSecrets !== []) {
+        $svixFail = SvixWebhookVerifier::verifyFailureMessageWithAnySecret($payload, $svixSecrets);
+        if ($svixFail !== null) {
+            error_log('CENTIIV WEBHOOK: Svix verification failed — ' . $svixFail);
             http_response_code(401);
             exit('Invalid signature');
         }
@@ -62,8 +81,9 @@ if ($webhookSecret !== '') {
             ?? $_SERVER['HTTP_X_SIGNATURE']
             ?? ''
         );
-        $expected = hash_hmac('sha256', $payload, $webhookSecret);
+        $expected = hash_hmac('sha256', $payload, $legacyWebhookSecret);
         if ($sig === '' || !hash_equals($expected, $sig)) {
+            error_log('CENTIIV WEBHOOK: legacy HMAC verification failed');
             http_response_code(401);
             exit('Invalid signature');
         }
@@ -73,6 +93,22 @@ if ($webhookSecret !== '') {
 if (!is_array($event)) {
     http_response_code(200);
     exit('OK');
+}
+
+// Sendra Aptos — Centiiv conversion orders (same URL as logistics; distinct metadata).
+if (centiiv_payload_is_sendra_ramp($event)) {
+    centiiv_handle_sendra_ramp_webhook($event, $accessToken, $aptosPhoneId);
+    http_response_code(200);
+    echo 'OK';
+    exit;
+}
+
+// Sendra — api.centiiv.io aggregator webhooks (`event_type`, no metadata in body).
+if (centiiv_payload_is_sendra_aggregator_completion($event)) {
+    centiiv_handle_sendra_aggregator_completion_webhook($event, $accessToken, $aptosPhoneId);
+    http_response_code(200);
+    echo 'OK';
+    exit;
 }
 
 $eventType = (string) ($event['event'] ?? '');
@@ -161,6 +197,51 @@ $finalize->run(
 
 http_response_code(200);
 echo 'OK';
+
+/**
+ * Unique `whsec_` secrets in env order (Payment vs Protocol vs Sendra may each use a different Svix key).
+ *
+ * @return list<string>
+ */
+function centiiv_webhook_collect_svix_secrets(): array
+{
+    $keys = [
+        $_ENV['CENTIIV_WEBHOOK_SECRET'] ?? getenv('CENTIIV_WEBHOOK_SECRET'),
+        $_ENV['CENTIIV_PROTOCOL_WEBHOOK_SECRET'] ?? getenv('CENTIIV_PROTOCOL_WEBHOOK_SECRET'),
+        $_ENV['SENDRA_CENTIIV_PROTOCOL_WEBHOOK_SECRET'] ?? getenv('SENDRA_CENTIIV_PROTOCOL_WEBHOOK_SECRET'),
+        $_ENV['SENDRA_CENTIIV_OFFRAMP_WEBHOOK_SECRET'] ?? getenv('SENDRA_CENTIIV_OFFRAMP_WEBHOOK_SECRET'),
+        $_ENV['SENDRA_CENTIIV_WEBHOOK_SECRET'] ?? getenv('SENDRA_CENTIIV_WEBHOOK_SECRET'),
+    ];
+    $out = [];
+    foreach ($keys as $raw) {
+        $s = trim((string) (($raw !== false && $raw !== null) ? $raw : ''));
+        if ($s !== '' && str_starts_with($s, 'whsec_') && !in_array($s, $out, true)) {
+            $out[] = $s;
+        }
+    }
+
+    return $out;
+}
+
+/** First non-whsec secret in the same env order (legacy HMAC). */
+function centiiv_webhook_first_legacy_webhook_secret(): string
+{
+    $keys = [
+        $_ENV['CENTIIV_WEBHOOK_SECRET'] ?? getenv('CENTIIV_WEBHOOK_SECRET'),
+        $_ENV['CENTIIV_PROTOCOL_WEBHOOK_SECRET'] ?? getenv('CENTIIV_PROTOCOL_WEBHOOK_SECRET'),
+        $_ENV['SENDRA_CENTIIV_PROTOCOL_WEBHOOK_SECRET'] ?? getenv('SENDRA_CENTIIV_PROTOCOL_WEBHOOK_SECRET'),
+        $_ENV['SENDRA_CENTIIV_OFFRAMP_WEBHOOK_SECRET'] ?? getenv('SENDRA_CENTIIV_OFFRAMP_WEBHOOK_SECRET'),
+        $_ENV['SENDRA_CENTIIV_WEBHOOK_SECRET'] ?? getenv('SENDRA_CENTIIV_WEBHOOK_SECRET'),
+    ];
+    foreach ($keys as $raw) {
+        $s = trim((string) (($raw !== false && $raw !== null) ? $raw : ''));
+        if ($s !== '' && !str_starts_with($s, 'whsec_')) {
+            return $s;
+        }
+    }
+
+    return '';
+}
 
 /**
  * @param array<string, mixed> $data
@@ -285,4 +366,394 @@ function centiiv_release_reservation_if_pending(
         'acceptance_payment_reference' => null,
     ]);
     error_log("Centiiv webhook: released reservation for req {$requestId} after non-success payment");
+}
+
+/**
+ * Centiiv GET /requests/{id} nests custom fields under metadata.metadata (user_phone, source, …).
+ *
+ * @param array<string, mixed> $meta
+ * @return array<string, mixed>
+ */
+function centiiv_sendra_flatten_order_metadata(array $meta): array
+{
+    $inner = $meta['metadata'] ?? null;
+    $base = $meta;
+    if (is_array($inner)) {
+        unset($base['metadata']);
+
+        return array_merge($base, $inner);
+    }
+
+    return $base;
+}
+
+/**
+ * Atomic "claim" so duplicate webhooks do not double-notify; file left in place after successful send.
+ */
+function centiiv_sendra_try_claim_terminal_notify(string $orderKey): bool
+{
+    $orderKey = trim($orderKey);
+    if ($orderKey === '' || strtolower($orderKey) === 'order') {
+        return true;
+    }
+    $safe = preg_replace('/[^a-zA-Z0-9_-]/', '_', $orderKey);
+    $path = sys_get_temp_dir() . '/sendra_centiiv_terminal_' . $safe;
+    $h = @fopen($path, 'xb');
+    if ($h === false) {
+        return false;
+    }
+    fwrite($h, (string) time());
+    fclose($h);
+
+    return true;
+}
+
+function centiiv_sendra_release_terminal_notify_lock(string $orderKey): void
+{
+    $orderKey = trim($orderKey);
+    if ($orderKey === '' || strtolower($orderKey) === 'order') {
+        return;
+    }
+    $safe = preg_replace('/[^a-zA-Z0-9_-]/', '_', $orderKey);
+    @unlink(sys_get_temp_dir() . '/sendra_centiiv_terminal_' . $safe);
+}
+
+/**
+ * @param array<string, mixed> $decoded GET /requests/{id} JSON body
+ * @return array<string, mixed>
+ */
+function centiiv_unwrap_get_request_data(array $decoded): array
+{
+    $inner = $decoded['data'] ?? null;
+    if (is_array($inner)) {
+        return $inner;
+    }
+
+    return $decoded;
+}
+
+/**
+ * Liquidity aggregator completion: `event_type` + `data.requestId` (webhook body has no metadata).
+ *
+ * @param array<string, mixed> $event
+ */
+function centiiv_payload_is_sendra_aggregator_completion(array $event): bool
+{
+    $type = (string) ($event['event_type'] ?? '');
+    if (!in_array($type, ['request.completed', 'settlement.completed'], true)) {
+        return false;
+    }
+    $data = $event['data'] ?? null;
+    if (!is_array($data)) {
+        return false;
+    }
+    $rid = $data['requestId'] ?? $data['request_id'] ?? null;
+    if (!is_string($rid) || trim($rid) === '') {
+        return false;
+    }
+    $st = strtolower((string) ($data['status'] ?? ''));
+    if ($st === '') {
+        return false;
+    }
+
+    return str_contains($st, 'fulfill') || str_contains($st, 'complete');
+}
+
+/**
+ * Enrich aggregator webhook with GET /requests/{id} so metadata.user_phone is available.
+ *
+ * @param array<string, mixed> $event
+ */
+function centiiv_handle_sendra_aggregator_completion_webhook(array $event, string $accessToken, string $aptosPhoneId): void
+{
+    $data = $event['data'] ?? [];
+    if (!is_array($data)) {
+        return;
+    }
+    $rid = isset($data['requestId']) && is_string($data['requestId']) ? trim($data['requestId']) : '';
+    if ($rid === '') {
+        return;
+    }
+    $agg = new SendraCentiivRampService();
+    if (!$agg->isConfigured()) {
+        error_log('CENTIIV WEBHOOK aggregator: SENDRA_CENTIIV_JWT not set; cannot enrich ' . $rid);
+
+        return;
+    }
+    $res = $agg->getRequest($rid);
+    if (!$res['success']) {
+        error_log('CENTIIV WEBHOOK aggregator: getRequest failed ' . $rid . ' http=' . (string) ($res['http_code'] ?? 0));
+
+        return;
+    }
+    $order = centiiv_unwrap_get_request_data($res['data']);
+    $rawMeta = $order['metadata'] ?? [];
+    if (is_object($rawMeta)) {
+        $rawMeta = (array) $rawMeta;
+    }
+    if (!is_array($rawMeta)) {
+        $rawMeta = [];
+    }
+    $flatMeta = centiiv_sendra_flatten_order_metadata($rawMeta);
+    $src = (string) ($flatMeta['source'] ?? '');
+    $phone = trim((string) ($flatMeta['user_phone'] ?? $flatMeta['userPhone'] ?? ''));
+    if ($src !== 'sendra_whatsapp' && $phone === '') {
+        error_log('CENTIIV WEBHOOK aggregator: skip non-Sendra order ' . $rid);
+
+        return;
+    }
+    error_log('CENTIIV WEBHOOK aggregator: Sendra completion for ' . $rid . ' wa=' . $phone);
+    $syntheticData = array_merge($order, $data);
+    $syntheticData['metadata'] = $flatMeta;
+    $synthetic = [
+        'data' => $syntheticData,
+        'timestamp' => $event['timestamp'] ?? null,
+    ];
+    centiiv_handle_sendra_ramp_webhook($synthetic, $accessToken, $aptosPhoneId);
+}
+
+/**
+ * Sendra Aptos sell/buy — order status webhooks from api.centiiv.io (metadata.source = sendra_whatsapp).
+ *
+ * @param array<string, mixed> $event
+ */
+function centiiv_handle_sendra_ramp_webhook(array $event, string $accessToken, string $aptosPhoneId): void
+{
+    $wa = new WhatsAppService($accessToken, $aptosPhoneId);
+    $norm = centiiv_sendra_normalize_conversion_event($event);
+    $phone = $norm['user_phone'];
+    $status = $norm['status'];
+    $orderLabel = $norm['order_label'];
+    $oneclickRef = isset($norm['oneclick_correlation_id']) ? trim((string) $norm['oneclick_correlation_id']) : '';
+    $refLine = $oneclickRef !== '' ? ("\n1Click ref: `{$oneclickRef}`") : '';
+
+    if ($phone === null || $phone === '') {
+        error_log('CENTIIV WEBHOOK sendra: no user_phone in metadata; ack only');
+
+        return;
+    }
+
+    $statusLc = strtolower($status);
+    if ($statusLc === '') {
+        return;
+    }
+
+    if (centiiv_sendra_is_terminal_success($statusLc)) {
+        if (!centiiv_sendra_try_claim_terminal_notify($orderLabel)) {
+            error_log('CENTIIV WEBHOOK sendra: duplicate terminal success skipped for ' . $orderLabel);
+
+            return;
+        }
+        $notifyOk = false;
+        $receiptPath = null;
+        try {
+            $receiptModel = SendraCentiivPayoutReceiptFactory::build($event, $norm);
+            $receiptPath = SendraPayoutReceiptImageService::renderToTempFile($receiptModel);
+        } catch (\Throwable $e) {
+            error_log('CENTIIV WEBHOOK sendra receipt: ' . $e->getMessage());
+        }
+        try {
+            if ($receiptPath !== null && is_string($receiptPath) && is_readable($receiptPath)) {
+                $imgRes = $wa->sendImage($phone, $receiptPath, '✅ Sendra — bank payout receipt');
+                if ($imgRes === false) {
+                    error_log('CENTIIV WEBHOOK sendra: sendImage upload failed for ' . $phone);
+                } elseif (is_array($imgRes) && empty($imgRes['success'])) {
+                    error_log('CENTIIV WEBHOOK sendra: sendImage API failed for ' . $phone);
+                }
+                @unlink($receiptPath);
+            }
+            $msgRes = $wa->sendMessage(
+                $phone,
+                "✅ *Bank payout complete*\n\n" .
+                "Order `{$orderLabel}` — NGN should credit your account shortly if it has not already.{$refLine}\n\n" .
+                'Need help? support@usesendra.com'
+            );
+            $notifyOk = is_array($msgRes) && !empty($msgRes['success']);
+            if (!$notifyOk) {
+                error_log('CENTIIV WEBHOOK sendra: sendMessage failed for ' . $phone);
+            }
+        } finally {
+            if (!$notifyOk) {
+                centiiv_sendra_release_terminal_notify_lock($orderLabel);
+            }
+        }
+    } elseif (centiiv_sendra_is_terminal_failure($statusLc)) {
+        $wa->sendMessage(
+            $phone,
+            "⚠️ *Conversion update*\n\n" .
+            "Your Centiiv order ({$orderLabel}) reported: *{$status}*.{$refLine}\n" .
+            "If you already sent crypto, check your email or contact support@usesendra.com with this message."
+        );
+    }
+}
+
+/**
+ * Merged metadata from Svix envelope (data.metadata + top-level metadata).
+ *
+ * @param array<string, mixed> $event
+ * @return array<string, mixed>
+ */
+function centiiv_sendra_extract_metadata(array $event): array
+{
+    $data = $event['data'] ?? null;
+    if (!is_array($data)) {
+        $data = [];
+    }
+    $meta = $data['metadata'] ?? [];
+    if (is_object($meta)) {
+        $meta = (array) $meta;
+    }
+    if (!is_array($meta)) {
+        $meta = [];
+    }
+    $meta = centiiv_sendra_flatten_order_metadata($meta);
+    $top = $event['metadata'] ?? [];
+    if (is_object($top)) {
+        $top = (array) $top;
+    }
+    if (!is_array($top)) {
+        $top = [];
+    }
+    $top = centiiv_sendra_flatten_order_metadata($top);
+
+    return array_merge($top, $meta);
+}
+
+/**
+ * @param array<string, mixed> $event
+ */
+function centiiv_payload_is_sendra_ramp(array $event): bool
+{
+    $meta = centiiv_sendra_extract_metadata($event);
+    if (($meta['source'] ?? '') === 'sendra_whatsapp') {
+        return true;
+    }
+
+    // Newer Centiiv order status webhooks may omit metadata.source/user_phone but still be Sendra:
+    // - beneficiary.externalId like "sendra_wa_2348..."
+    // - description like "Sendra WhatsApp sell 2347..."
+    $data = $event['data'] ?? null;
+    if (is_object($data)) {
+        $data = (array) $data;
+    }
+    if (!is_array($data)) {
+        $data = [];
+    }
+    $beneficiary = $data['beneficiary'] ?? null;
+    if (is_object($beneficiary)) {
+        $beneficiary = (array) $beneficiary;
+    }
+    if (is_array($beneficiary)) {
+        $externalId = $beneficiary['externalId'] ?? $beneficiary['external_id'] ?? null;
+        if (is_string($externalId) && str_starts_with($externalId, 'sendra_wa_')) {
+            return true;
+        }
+    }
+    $desc = $data['description'] ?? $event['description'] ?? null;
+    if (is_string($desc) && preg_match('/\bSendra\s+WhatsApp\s+sell\s+(\d{10,20})\b/i', $desc) === 1) {
+        return true;
+    }
+
+    $eventType = (string) ($event['event'] ?? '');
+    if ($eventType === 'disbursement.status') {
+        $phone = trim((string) ($meta['user_phone'] ?? $meta['userPhone'] ?? ''));
+        if ($phone === '') {
+            return false;
+        }
+        if (!empty($meta['sendra_oneclick_correlation_id']) || !empty($meta['sendra_ledger_asset']) || !empty($meta['sendra_ledger_amount'])) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/**
+ * @param array<string, mixed> $event
+ * @return array{user_phone: ?string, status: string, order_label: string, oneclick_correlation_id: string}
+ */
+function centiiv_sendra_normalize_conversion_event(array $event): array
+{
+    $data = $event['data'] ?? $event;
+
+    if (is_object($data)) {
+        $data = (array) $data;
+    }
+    if (!is_array($data)) {
+        $data = [];
+    }
+
+    $meta = centiiv_sendra_extract_metadata($event);
+
+    $phone = $meta['user_phone'] ?? $meta['userPhone'] ?? null;
+    if (is_string($phone)) {
+        $phone = trim($phone);
+    } else {
+        $phone = null;
+    }
+    if ($phone === null || $phone === '') {
+        $beneficiary = $data['beneficiary'] ?? null;
+        if (is_object($beneficiary)) {
+            $beneficiary = (array) $beneficiary;
+        }
+        if (is_array($beneficiary)) {
+            $externalId = $beneficiary['externalId'] ?? $beneficiary['external_id'] ?? null;
+            if (is_string($externalId) && preg_match('/^sendra_wa_(\d{10,20})$/', $externalId, $m) === 1) {
+                $phone = $m[1];
+            }
+        }
+    }
+    if ($phone === null || $phone === '') {
+        $desc = $data['description'] ?? $event['description'] ?? null;
+        if (is_string($desc) && preg_match('/\bSendra\s+WhatsApp\s+sell\s+(\d{10,20})\b/i', $desc, $m) === 1) {
+            $phone = $m[1];
+        }
+    }
+
+    $status = (string) ($data['status'] ?? $data['orderStatus'] ?? $event['status'] ?? '');
+    $id = $data['id'] ?? $data['orderId'] ?? $data['requestId'] ?? $data['entryId'] ?? $data['entry_id'] ?? null;
+    if (($id === null || $id === '') && isset($meta['sendra_centiiv_order_id'])) {
+        $id = $meta['sendra_centiiv_order_id'];
+    }
+    if (($id === null || $id === '') && isset($meta['trackingId'])) {
+        $id = $meta['trackingId'];
+    }
+    if ($id === null || $id === '') {
+        $id = $event['id'] ?? '';
+    }
+    $orderLabel = $id !== '' ? (string) $id : 'order';
+
+    $oc = isset($meta['sendra_oneclick_correlation_id']) ? trim((string) $meta['sendra_oneclick_correlation_id']) : '';
+    if ($oc === '' && isset($meta['oneclick_correlation_id'])) {
+        $oc = trim((string) $meta['oneclick_correlation_id']);
+    }
+
+    return [
+        'user_phone' => $phone,
+        'status' => $status,
+        'order_label' => $orderLabel,
+        'oneclick_correlation_id' => $oc,
+    ];
+}
+
+function centiiv_sendra_is_terminal_success(string $statusLc): bool
+{
+    foreach (['fulfilled', 'complete', 'completed', 'success', 'paid', 'settled'] as $needle) {
+        if (str_contains($statusLc, $needle)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+function centiiv_sendra_is_terminal_failure(string $statusLc): bool
+{
+    foreach (['fail', 'cancel', 'expire', 'reject', 'error'] as $needle) {
+        if (str_contains($statusLc, $needle)) {
+            return true;
+        }
+    }
+
+    return false;
 }

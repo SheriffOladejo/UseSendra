@@ -9,7 +9,8 @@ class CentivService
 
     public function __construct()
     {
-        $this->apiKey = "cnt-test_emwwmaocp973m87aeip4jkoj0jsdygqb";
+        // Legacy Centiv Africa stub — Sendra Aptos uses {@see SendraCentiivRampService}.
+        $this->apiKey = (string) ($_ENV['CENTIV_LEGACY_API_KEY'] ?? getenv('CENTIV_LEGACY_API_KEY') ?: '');
     }
 
     /**

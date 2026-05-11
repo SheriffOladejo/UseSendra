@@ -115,7 +115,7 @@ foreach ($expiredSearch as $row) {
                 $body,
                 [
                     "rebroadcast_{$id}" => '🔁 Ping again',
-                    "cancel_job_{$id}" => '❌ Cancel',
+                    "cancel_job_{$id}" => 'Cancel',
                 ]
             );
         } elseif ($templSearchEndedSender !== '') {

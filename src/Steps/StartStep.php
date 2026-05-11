@@ -37,10 +37,11 @@ class StartStep extends BaseStep
                 );
                 return '';
             }
-            $this->nextStep($phone, 'in_review');
+            // No more "in_review" holding step: let pending drivers continue onboarding.
+            $this->nextStep($phone, 'rider_name');
             $this->whatsappService->sendMessage(
                 $phone,
-                'Sendra Logistics 🚚' . "\nYour rider profile is still under review. We'll message you when it's approved."
+                "Sendra Logistics 🚚\nLet’s finish setting up your rider profile.\n\nPlease enter your *full name* (First name + Last name):"
             );
             return '';
         }

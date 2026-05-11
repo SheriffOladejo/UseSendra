@@ -1,0 +1,76 @@
+The bot studies what the top 100 traders on Hyperliquid with earnings of $10k–$500k are doing. It learns from their trades and applies the same logic to ETH and SOL, calculating 34 technical indicators simultaneously. It automatically enters trades when the signal is strong enough, dynamically manages risk, and stops itself if things go wrong."
+
+What This Bot Does – Complete Overview
+
+🔍 Module 1 – Smart Money Scanner
+Scans the Hyperliquid public leaderboard and filters 100 profitable traders with:
+
+PnL between $10,000 and $500,000 (no lucky millionaires, consistent performers only)
+Win rate ≥ 52%
+Minimum 50 trades (statistically significant)
+
+For each trader it extracts:
+
+Average leverage used
+Margin type preference (isolated vs cross)
+Average trade duration
+Most traded assets
+Win rate on longs vs shorts
+
+This builds an aggregate smart money profile that the bot uses to calibrate its own behavior. If profitable traders average 6x leverage, the bot won't exceed 9x even on a perfect signal.
+Results are cached in smart_money.json so it doesn't re-scan every time.
+
+📡 Module 2 – Technical Analysis Engine (34 indicators)
+Every 60 seconds, the bot fetches live candle data for ETH and SOL and calculates:
+Trend indicators:
+
+EMA 9 / 21 / 50 / 200 – direction and cross detection
+ADX + DI+ / DI- – trend strength (above 25 = real trend)
+Parabolic SAR – dynamic trend reversal points
+Ichimoku Cloud – trend, support/resistance, momentum combined
+
+Momentum indicators:
+
+RSI 14 – overbought/oversold with bounce detection
+MACD 12/26/9 – momentum and cross signals
+Stochastic RSI – faster momentum on extreme levels
+CCI – statistical deviation from mean price
+Williams %R – fast overbought/oversold
+MFI (Money Flow Index) – RSI weighted by volume
+
+Volume indicators:
+
+Volume MA 20 – spike detection (> 1.5× average)
+OBV (On Balance Volume) – cumulative buy/sell pressure
+VWAP – fair value anchor, directional bias
+
+Volatility / Structure:
+
+Bollinger Bands 20,2 – mean reversion levels
+Keltner Channels – volatility-adjusted bands
+Donchian Channels – breakout detection
+ATR 14 – current market volatility (used for SL/TP sizing)
+
+Perpetual-specific (Hyperliquid only):
+
+Funding Rate – market sentiment, overcrowded positions
+Open Interest – capital flow into the market
+Mark Price vs Index Price – premium/discount to spot
+
+
+🧠 Module 3 – Signal Scoring System
+Every indicator has a weight. After checking all conditions, the bot produces two scores:
+LONG score:   0–100
+SHORT score:  0–100
+Example breakdown for a LONG signal:
+✅ EMA bullish cross          +15 pts
+✅ Trend UP (EMA9>21>50)      +10 pts
+✅ ADX > 25, DI+ > DI-         +8 pts
+✅ RSI bounce from oversold   +12 pts
+✅ MACD bullish cross         +10 pts
+✅ Volume spike 2.1×           +7 pts
+✅ Confirmed on 4H             +10 pts
+❌ Not near BB Lower            +0 pts
+─────────────────────────────────────
+   Total LONG score:  72/100
+A trade is only opened when score ≥ 45. Below that, the bot does nothing.

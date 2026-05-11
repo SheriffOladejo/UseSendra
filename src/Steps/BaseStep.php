@@ -190,4 +190,74 @@ abstract class BaseStep implements StepInterface
         );
     }
 
+    /**
+     * Lightweight per-session rate limiting (stored in whatsapp_sessions.data JSON).
+     * Used to avoid exhausting paid third-party API credits during onboarding retries.
+     *
+     * Buckets are per phone number (session), e.g. "prembly.nin", "prembly.plate", "prembly.bvn".
+     *
+     * @return array{allowed: bool, retry_after_seconds: int, count_today: int}
+     */
+    protected function rateLimitAllow(string $bucket, int $maxPerDay, int $minIntervalSeconds = 20): array
+    {
+        $now = time();
+        $day = date('Y-m-d', $now);
+
+        $d = $this->getSessionData();
+        $rl = $d['rate_limits'] ?? [];
+        if (!is_array($rl)) {
+            $rl = [];
+        }
+        $b = $rl[$bucket] ?? [];
+        if (!is_array($b)) {
+            $b = [];
+        }
+
+        $bucketDay = is_string($b['day'] ?? null) ? $b['day'] : null;
+        $count = is_numeric($b['count'] ?? null) ? (int) $b['count'] : 0;
+        $lastAt = is_numeric($b['last_at'] ?? null) ? (int) $b['last_at'] : 0;
+
+        if ($bucketDay !== $day) {
+            $bucketDay = $day;
+            $count = 0;
+            $lastAt = 0;
+        }
+
+        $since = $lastAt > 0 ? ($now - $lastAt) : PHP_INT_MAX;
+        if ($lastAt > 0 && $since < $minIntervalSeconds) {
+            return [
+                'allowed' => false,
+                'retry_after_seconds' => max(1, $minIntervalSeconds - $since),
+                'count_today' => $count,
+            ];
+        }
+
+        if ($count >= $maxPerDay) {
+            // Retry window is "tomorrow" (roughly).
+            $tomorrow = strtotime($day . ' 23:59:59') ?: ($now + 86400);
+            $retry = max(60, $tomorrow - $now);
+            return [
+                'allowed' => false,
+                'retry_after_seconds' => $retry,
+                'count_today' => $count,
+            ];
+        }
+
+        $count++;
+        $lastAt = $now;
+        $rl[$bucket] = [
+            'day' => $bucketDay,
+            'count' => $count,
+            'last_at' => $lastAt,
+        ];
+        $d['rate_limits'] = $rl;
+        $this->setSessionData($d);
+
+        return [
+            'allowed' => true,
+            'retry_after_seconds' => 0,
+            'count_today' => $count,
+        ];
+    }
+
 }

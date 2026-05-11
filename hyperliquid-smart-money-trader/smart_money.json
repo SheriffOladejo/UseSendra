@@ -1,0 +1,2021 @@
+{
+  "cached_at_unix": 1778492610.3172905,
+  "constraints": {
+    "max_traders": 100,
+    "min_trades": 50,
+    "pnl_max": 500000.0,
+    "pnl_min": 10000.0,
+    "win_rate_min": 0.52
+  },
+  "network": "mainnet",
+  "source": "mainnet-leaderboard+fills",
+  "summary": {
+    "avg_leverage": 7.3,
+    "avg_trade_duration_min": 6662,
+    "avg_win_rate": 0.71,
+    "candidates_in_range": 10918,
+    "considered": 1024,
+    "incomplete": false,
+    "resume_idx": 162,
+    "time_budget_sec": 20.0,
+    "total_pnl": 48026245.76,
+    "traders_count": 100
+  },
+  "traders": [
+    {
+      "account_value": 1954521.390257,
+      "address": "0x279818c822e5c6135d989df50d0bba96e9564ce5",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 1429,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "@142",
+        "@151"
+      ],
+      "pnl": 499676.17,
+      "rank": 1,
+      "roi_all_time": 0.3819850038,
+      "trade_count": 921,
+      "volume_all_time": 147571599.76,
+      "win_rate": 0.61,
+      "win_rate_long": 0.0,
+      "win_rate_short": 0.0
+    },
+    {
+      "account_value": 17093.412236,
+      "address": "0xff486946dfe8d0cd30c3b37eb383ba2a38223067",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 358,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "PURR/USDC",
+        "@1"
+      ],
+      "pnl": 498934.7,
+      "rank": 2,
+      "roi_all_time": 45.4227487839,
+      "trade_count": 1219,
+      "volume_all_time": 18541589.85,
+      "win_rate": 0.55,
+      "win_rate_long": 0.33,
+      "win_rate_short": 0.0
+    },
+    {
+      "account_value": 0.11656,
+      "address": "0x0c52b0cedd939f108d36539fa238d5e56b31ba41",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 60,
+      "display_name": "Retail",
+      "margin_type": null,
+      "most_traded_assets": [
+        "WIF",
+        "SOL"
+      ],
+      "pnl": 498846.8,
+      "rank": 3,
+      "roi_all_time": 82.0748693648,
+      "trade_count": 1167,
+      "volume_all_time": 65337118.13,
+      "win_rate": 0.73,
+      "win_rate_long": 0.73,
+      "win_rate_short": 0.44
+    },
+    {
+      "account_value": 249750.381947,
+      "address": "0xf8e190c49164d6aa2f4362bd429e2c400baf7c61",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 3186,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "@188",
+        "@142"
+      ],
+      "pnl": 498597.06,
+      "rank": 4,
+      "roi_all_time": 1.643194891,
+      "trade_count": 281,
+      "volume_all_time": 31218481.68,
+      "win_rate": 0.68,
+      "win_rate_long": 0.78,
+      "win_rate_short": 0.63
+    },
+    {
+      "account_value": 2.061129,
+      "address": "0x01074d30c7e968c3a88149a7cf0dde9aeae79992",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 1556,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "SOL",
+        "BNB"
+      ],
+      "pnl": 497163.73,
+      "rank": 5,
+      "roi_all_time": 3.2515051289,
+      "trade_count": 450,
+      "volume_all_time": 82577536.32,
+      "win_rate": 0.57,
+      "win_rate_long": 0.67,
+      "win_rate_short": 0.54
+    },
+    {
+      "account_value": 0.070936,
+      "address": "0x11b6ccc31cb488f491e57d8f2d4e1b549a2442a4",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 106,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "@107",
+        "@254"
+      ],
+      "pnl": 497082.9,
+      "rank": 6,
+      "roi_all_time": 1.6232097291,
+      "trade_count": 804,
+      "volume_all_time": 17913966.84,
+      "win_rate": 0.69,
+      "win_rate_long": 0.33,
+      "win_rate_short": 0.52
+    },
+    {
+      "account_value": 450977.060599,
+      "address": "0x25821b2248d939b95563a1515ee97e45d32b51a8",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 11579,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "BTC",
+        "HYPE"
+      ],
+      "pnl": 497067.41,
+      "rank": 7,
+      "roi_all_time": 3.7106595449,
+      "trade_count": 1096,
+      "volume_all_time": 212391774.3,
+      "win_rate": 0.54,
+      "win_rate_long": 0.61,
+      "win_rate_short": 0.51
+    },
+    {
+      "account_value": 0.499575,
+      "address": "0xba81ec9ed0035377149fefcaafd1f4e47e2fd08a",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 165,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "BTC",
+        "PURR/USDC"
+      ],
+      "pnl": 496887.97,
+      "rank": 8,
+      "roi_all_time": 2.113746879,
+      "trade_count": 767,
+      "volume_all_time": 37927445.77,
+      "win_rate": 0.77,
+      "win_rate_long": 0.52,
+      "win_rate_short": 0.81
+    },
+    {
+      "account_value": 1212025.304736,
+      "address": "0x248ee78390f5505d34f36ce2df87d79fbcdb6be2",
+      "avg_leverage": 5.0,
+      "avg_trade_duration_min": 19878,
+      "display_name": null,
+      "margin_type": "cross",
+      "most_traded_assets": [
+        "HYPE",
+        "XYZ:GOOGL"
+      ],
+      "pnl": 495676.17,
+      "rank": 9,
+      "roi_all_time": 0.2837374871,
+      "trade_count": 1332,
+      "volume_all_time": 65423536.3,
+      "win_rate": 0.81,
+      "win_rate_long": 0.81,
+      "win_rate_short": 0.0
+    },
+    {
+      "account_value": 110.422911,
+      "address": "0x696d4197f56459f9e3de76aafc02ce938f51d969",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 740,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "KPEPE",
+        "SOL"
+      ],
+      "pnl": 495430.83,
+      "rank": 10,
+      "roi_all_time": 17.8201183921,
+      "trade_count": 609,
+      "volume_all_time": 28433916.82,
+      "win_rate": 0.6,
+      "win_rate_long": 0.49,
+      "win_rate_short": 0.21
+    },
+    {
+      "account_value": 0.034125,
+      "address": "0x6397d19bafc329b9c20e64000afda9f03ef3eded",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 210,
+      "display_name": "thank you jefff",
+      "margin_type": null,
+      "most_traded_assets": [
+        "ETH",
+        "BTC"
+      ],
+      "pnl": 495167.92,
+      "rank": 11,
+      "roi_all_time": 4.8125478759,
+      "trade_count": 519,
+      "volume_all_time": 92322397.6,
+      "win_rate": 0.65,
+      "win_rate_long": 0.63,
+      "win_rate_short": 0.5
+    },
+    {
+      "account_value": 0.031862,
+      "address": "0x7224a1a8750d77c182d7ade10b8edcbd3aae0e2d",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 81,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "XPL",
+        "ASTER"
+      ],
+      "pnl": 494587.59,
+      "rank": 12,
+      "roi_all_time": 1.4421714819,
+      "trade_count": 767,
+      "volume_all_time": 109618473.24,
+      "win_rate": 0.65,
+      "win_rate_long": 0.66,
+      "win_rate_short": 0.0
+    },
+    {
+      "account_value": 58403.820912,
+      "address": "0xda23ab0b2636c3f9806a868278d73aef2439ab60",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 1896,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "VVV",
+        "BTC"
+      ],
+      "pnl": 494138.2,
+      "rank": 13,
+      "roi_all_time": 9.9187144338,
+      "trade_count": 885,
+      "volume_all_time": 23013393.95,
+      "win_rate": 0.81,
+      "win_rate_long": 0.53,
+      "win_rate_short": 0.88
+    },
+    {
+      "account_value": 152852.287809,
+      "address": "0xc16b8ddcef47a74c9b76cd28e6834270090d72dd",
+      "avg_leverage": 5.33,
+      "avg_trade_duration_min": 4673,
+      "display_name": null,
+      "margin_type": "cross",
+      "most_traded_assets": [
+        "ZEC",
+        "XYZ:GOLD"
+      ],
+      "pnl": 493907.93,
+      "rank": 14,
+      "roi_all_time": 0.9484200971,
+      "trade_count": 1361,
+      "volume_all_time": 6275010.1,
+      "win_rate": 0.88,
+      "win_rate_long": 0.53,
+      "win_rate_short": 1.0
+    },
+    {
+      "account_value": 0.0,
+      "address": "0xee2871d4a2c30bdc5ea17da7c72d3cbeaaab78b7",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 1249,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "ASTER"
+      ],
+      "pnl": 493036.79,
+      "rank": 15,
+      "roi_all_time": 0.1500421331,
+      "trade_count": 733,
+      "volume_all_time": 48341054.92,
+      "win_rate": 0.99,
+      "win_rate_long": 0.99,
+      "win_rate_short": 0.99
+    },
+    {
+      "account_value": 477289.339073,
+      "address": "0xa31a661fa0247e04499291c98c57ca23dc2d26db",
+      "avg_leverage": 10.0,
+      "avg_trade_duration_min": 3438,
+      "display_name": null,
+      "margin_type": "cross",
+      "most_traded_assets": [
+        "HYPE",
+        "BTC"
+      ],
+      "pnl": 492364.44,
+      "rank": 16,
+      "roi_all_time": 17.1620412357,
+      "trade_count": 598,
+      "volume_all_time": 20207880.01,
+      "win_rate": 0.71,
+      "win_rate_long": 0.75,
+      "win_rate_short": 0.67
+    },
+    {
+      "account_value": 846675.966538,
+      "address": "0x39a04e90140793ec048323284425cd2ff53480d6",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 1960,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "@107",
+        "HYPE"
+      ],
+      "pnl": 492087.19,
+      "rank": 17,
+      "roi_all_time": 0.8288638665,
+      "trade_count": 1089,
+      "volume_all_time": 156492657.34,
+      "win_rate": 0.81,
+      "win_rate_long": 0.56,
+      "win_rate_short": 0.82
+    },
+    {
+      "account_value": 290133.613738,
+      "address": "0x5dc26505b5118adc172fd8ef764a1c5af60667cb",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 136,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "BTC",
+        "ETH"
+      ],
+      "pnl": 491925.61,
+      "rank": 18,
+      "roi_all_time": 3.1850153042,
+      "trade_count": 1636,
+      "volume_all_time": 1352565492.05,
+      "win_rate": 0.66,
+      "win_rate_long": 0.64,
+      "win_rate_short": 0.66
+    },
+    {
+      "account_value": 1.412812,
+      "address": "0xba3e43bc9232d0b8df22ddcdbf823a90ad12ff41",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 3298,
+      "display_name": "Gobshite Capital",
+      "margin_type": null,
+      "most_traded_assets": [
+        "ETH",
+        "BTC"
+      ],
+      "pnl": 491889.25,
+      "rank": 19,
+      "roi_all_time": 3.2663293501,
+      "trade_count": 967,
+      "volume_all_time": 116172885.03,
+      "win_rate": 0.67,
+      "win_rate_long": 0.52,
+      "win_rate_short": 0.76
+    },
+    {
+      "account_value": 303869.059542,
+      "address": "0x29516dcf8b40718a5ef925981768d43277fa89e0",
+      "avg_leverage": null,
+      "avg_trade_duration_min": null,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "@107",
+        "@151"
+      ],
+      "pnl": 491860.75,
+      "rank": 20,
+      "roi_all_time": 93.1033335015,
+      "trade_count": 1018,
+      "volume_all_time": 101942230.69,
+      "win_rate": 0.74,
+      "win_rate_long": 0.0,
+      "win_rate_short": 0.0
+    },
+    {
+      "account_value": 431687.255381,
+      "address": "0xe41aa443bad860e6b584060cc365b58dc34caf92",
+      "avg_leverage": 5.0,
+      "avg_trade_duration_min": 86982,
+      "display_name": null,
+      "margin_type": "cross",
+      "most_traded_assets": [
+        "WLFI",
+        "ASTER"
+      ],
+      "pnl": 491226.2,
+      "rank": 21,
+      "roi_all_time": 1.1615647177,
+      "trade_count": 91,
+      "volume_all_time": 5362607.62,
+      "win_rate": 0.9,
+      "win_rate_long": 0.0,
+      "win_rate_short": 0.79
+    },
+    {
+      "account_value": 104.266038,
+      "address": "0x79b70794a1eaf86ee793ba554fd9ff808a9b5805",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 13809,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "@107",
+        "SOL"
+      ],
+      "pnl": 490507.52,
+      "rank": 22,
+      "roi_all_time": 12.1903843488,
+      "trade_count": 78,
+      "volume_all_time": 35351711.82,
+      "win_rate": 0.69,
+      "win_rate_long": 0.6,
+      "win_rate_short": 1.0
+    },
+    {
+      "account_value": 672294.380624,
+      "address": "0x310a05a1a4786ac5b612bce6ee755f11a949444a",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 1288,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "ETH",
+        "@8"
+      ],
+      "pnl": 490465.03,
+      "rank": 23,
+      "roi_all_time": 1.875074701,
+      "trade_count": 514,
+      "volume_all_time": 1700414.64,
+      "win_rate": 0.64,
+      "win_rate_long": 0.44,
+      "win_rate_short": 0.33
+    },
+    {
+      "account_value": 564227.919717,
+      "address": "0x8ae20fabeb608fd307fc1ea15a294340a547d501",
+      "avg_leverage": 2.0,
+      "avg_trade_duration_min": 30556,
+      "display_name": null,
+      "margin_type": "isolated",
+      "most_traded_assets": [
+        "PURR/USDC",
+        "MANTA"
+      ],
+      "pnl": 490375.13,
+      "rank": 24,
+      "roi_all_time": 3.6308171274,
+      "trade_count": 813,
+      "volume_all_time": 3289663.1799999997,
+      "win_rate": 0.67,
+      "win_rate_long": 0.45,
+      "win_rate_short": 0.64
+    },
+    {
+      "account_value": 169131.72603,
+      "address": "0x3fa8ed10f4aa3ac5b2c43d8bd59d8830f88d974c",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 4593,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "BTC",
+        "@142"
+      ],
+      "pnl": 490223.42,
+      "rank": 25,
+      "roi_all_time": 45.461638532,
+      "trade_count": 219,
+      "volume_all_time": 21014698.01,
+      "win_rate": 0.59,
+      "win_rate_long": 0.54,
+      "win_rate_short": 0.67
+    },
+    {
+      "account_value": 2443838.061209,
+      "address": "0x45a5aea03e5a6dbc6f46a708562250c83afc4fc4",
+      "avg_leverage": 5.0,
+      "avg_trade_duration_min": 33664,
+      "display_name": null,
+      "margin_type": "cross",
+      "most_traded_assets": [
+        "HYPE",
+        "@107"
+      ],
+      "pnl": 490182.82,
+      "rank": 26,
+      "roi_all_time": 0.220565595,
+      "trade_count": 67,
+      "volume_all_time": 11703506.59,
+      "win_rate": 0.54,
+      "win_rate_long": 0.0,
+      "win_rate_short": 0.97
+    },
+    {
+      "account_value": 245196.146868,
+      "address": "0xdf59ab0bc4e175667b6e2bd77fdc585d088b5a2e",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 321,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "BTC",
+        "ETH"
+      ],
+      "pnl": 489757.13,
+      "rank": 27,
+      "roi_all_time": 1.945112033,
+      "trade_count": 463,
+      "volume_all_time": 298662174.99,
+      "win_rate": 0.62,
+      "win_rate_long": 0.56,
+      "win_rate_short": 0.94
+    },
+    {
+      "account_value": 101.133528,
+      "address": "0x752e17d23a0926e0144aeb42e9af4ba61f036e15",
+      "avg_leverage": null,
+      "avg_trade_duration_min": null,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "@142",
+        "@151"
+      ],
+      "pnl": 489333.73,
+      "rank": 28,
+      "roi_all_time": 0.4581540425,
+      "trade_count": 94,
+      "volume_all_time": 16784225.82,
+      "win_rate": 0.52,
+      "win_rate_long": 0.0,
+      "win_rate_short": 0.0
+    },
+    {
+      "account_value": 107441.91695,
+      "address": "0x011820f60d75a2b870ffe64a4764873e14bc8ede",
+      "avg_leverage": 15.0,
+      "avg_trade_duration_min": 4690,
+      "display_name": null,
+      "margin_type": "cross",
+      "most_traded_assets": [
+        "LIT",
+        "CC"
+      ],
+      "pnl": 488650.67,
+      "rank": 29,
+      "roi_all_time": 5.7426184236,
+      "trade_count": 1115,
+      "volume_all_time": 36536758.67,
+      "win_rate": 0.64,
+      "win_rate_long": 0.81,
+      "win_rate_short": 0.61
+    },
+    {
+      "account_value": 244735.7009,
+      "address": "0xe31b3cbeebc18509e304b933467d50a91d70583f",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 547,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "PURR/USDC",
+        "@107"
+      ],
+      "pnl": 487647.23,
+      "rank": 30,
+      "roi_all_time": 4.1249843902,
+      "trade_count": 656,
+      "volume_all_time": 1727895.33,
+      "win_rate": 0.76,
+      "win_rate_long": 0.69,
+      "win_rate_short": 0.58
+    },
+    {
+      "account_value": 522093.580684,
+      "address": "0xee305301ccde81703a7ec630c80d3fee20ebea84",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 657,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "DOGE",
+        "ARB"
+      ],
+      "pnl": 487480.39,
+      "rank": 31,
+      "roi_all_time": 14.083659746,
+      "trade_count": 465,
+      "volume_all_time": 9973141.41,
+      "win_rate": 0.67,
+      "win_rate_long": 0.58,
+      "win_rate_short": 0.82
+    },
+    {
+      "account_value": 304966.580121,
+      "address": "0xca4aac200b14a5942790c121d2c30ea9a2bf9a15",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 50617,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "BTC",
+        "@142"
+      ],
+      "pnl": 487420.31,
+      "rank": 32,
+      "roi_all_time": 2.1901976165,
+      "trade_count": 76,
+      "volume_all_time": 10944096.11,
+      "win_rate": 0.61,
+      "win_rate_long": 0.0,
+      "win_rate_short": 0.55
+    },
+    {
+      "account_value": 146083.461025,
+      "address": "0x51a3ae53b422b6bf23393fa4c73081bd25d7f591",
+      "avg_leverage": 17.0,
+      "avg_trade_duration_min": 3274,
+      "display_name": null,
+      "margin_type": "cross",
+      "most_traded_assets": [
+        "BERA",
+        "ASTER"
+      ],
+      "pnl": 487366.18,
+      "rank": 33,
+      "roi_all_time": 9.8883777914,
+      "trade_count": 957,
+      "volume_all_time": 238588999.13,
+      "win_rate": 0.78,
+      "win_rate_long": 0.74,
+      "win_rate_short": 0.84
+    },
+    {
+      "account_value": 1276631.282968,
+      "address": "0xc42e044bb438ad4eec6973719a5eac26b7fa55d7",
+      "avg_leverage": null,
+      "avg_trade_duration_min": null,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "@107",
+        "@142"
+      ],
+      "pnl": 486750.2,
+      "rank": 34,
+      "roi_all_time": 0.4309886806,
+      "trade_count": 506,
+      "volume_all_time": 1613438.77,
+      "win_rate": 1.0,
+      "win_rate_long": 0.0,
+      "win_rate_short": 0.0
+    },
+    {
+      "account_value": 279451.865047,
+      "address": "0xd52cdf1414351d2c37cfe60a62dde69256044ce0",
+      "avg_leverage": 4.25,
+      "avg_trade_duration_min": 8946,
+      "display_name": null,
+      "margin_type": "cross",
+      "most_traded_assets": [
+        "BERA",
+        "@107"
+      ],
+      "pnl": 486419.77,
+      "rank": 35,
+      "roi_all_time": 0.2793850467,
+      "trade_count": 1169,
+      "volume_all_time": 11038983.71,
+      "win_rate": 0.57,
+      "win_rate_long": 0.88,
+      "win_rate_short": 0.55
+    },
+    {
+      "account_value": 113382.339169,
+      "address": "0x3132c8b48e8ee7cc1d79337599fbc486d32645b8",
+      "avg_leverage": 2.0,
+      "avg_trade_duration_min": 1195,
+      "display_name": "YoYo",
+      "margin_type": "cross",
+      "most_traded_assets": [
+        "@107",
+        "ETH"
+      ],
+      "pnl": 485496.61,
+      "rank": 36,
+      "roi_all_time": 2.4968811992,
+      "trade_count": 1041,
+      "volume_all_time": 196398740.74,
+      "win_rate": 0.67,
+      "win_rate_long": 0.68,
+      "win_rate_short": 0.29
+    },
+    {
+      "account_value": 407857.294134,
+      "address": "0xc6a4d5ae5d32ff24f5d0b0d8e939582d92f8d847",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 8034,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "HYPE",
+        "ZEC"
+      ],
+      "pnl": 485127.36,
+      "rank": 37,
+      "roi_all_time": 0.2252223202,
+      "trade_count": 604,
+      "volume_all_time": 34797988.79,
+      "win_rate": 0.65,
+      "win_rate_long": 0.72,
+      "win_rate_short": 0.5
+    },
+    {
+      "account_value": 737622.7811,
+      "address": "0x7786498ffb58bedc6c392a4a40789be5c2da240d",
+      "avg_leverage": 4.25,
+      "avg_trade_duration_min": 10203,
+      "display_name": null,
+      "margin_type": "cross",
+      "most_traded_assets": [
+        "JTO",
+        "ZETA"
+      ],
+      "pnl": 485066.97,
+      "rank": 38,
+      "roi_all_time": 0.557427787,
+      "trade_count": 1170,
+      "volume_all_time": 13467399.91,
+      "win_rate": 0.72,
+      "win_rate_long": 0.89,
+      "win_rate_short": 0.37
+    },
+    {
+      "account_value": 1455746.66815,
+      "address": "0xa1582a9d38775a3a5cff79168d68a72c369daddd",
+      "avg_leverage": 3.0,
+      "avg_trade_duration_min": 1602,
+      "display_name": null,
+      "margin_type": "cross",
+      "most_traded_assets": [
+        "BTC",
+        "XYZ:SILVER"
+      ],
+      "pnl": 484372.36,
+      "rank": 39,
+      "roi_all_time": 0.4696377963,
+      "trade_count": 575,
+      "volume_all_time": 124345044.28,
+      "win_rate": 0.81,
+      "win_rate_long": 0.77,
+      "win_rate_short": 0.94
+    },
+    {
+      "account_value": 2.434175,
+      "address": "0x05d8fa8346470be95c8fa94300ccb313c0775c6c",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 3797,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "HYPE",
+        "BTC"
+      ],
+      "pnl": 484285.04,
+      "rank": 40,
+      "roi_all_time": 38.6458692348,
+      "trade_count": 866,
+      "volume_all_time": 46292152.76,
+      "win_rate": 0.54,
+      "win_rate_long": 0.56,
+      "win_rate_short": 0.62
+    },
+    {
+      "account_value": 71788.96916,
+      "address": "0xb730e6f15b5d89254db2e84cf0a7fc3bcc2129cc",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 0,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "MEGA"
+      ],
+      "pnl": 484057.22,
+      "rank": 41,
+      "roi_all_time": 8.780819118,
+      "trade_count": 1119,
+      "volume_all_time": 566790982.15,
+      "win_rate": 0.72,
+      "win_rate_long": 0.91,
+      "win_rate_short": 0.7
+    },
+    {
+      "account_value": 0.057382,
+      "address": "0x4e72d406f0a0d5167ab9ad6cf6c58182922b40fc",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 309,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "AVAX",
+        "WLD"
+      ],
+      "pnl": 483613.28,
+      "rank": 42,
+      "roi_all_time": 1.2181148431,
+      "trade_count": 1997,
+      "volume_all_time": 85965446.4,
+      "win_rate": 0.99,
+      "win_rate_long": 0.1,
+      "win_rate_short": 0.99
+    },
+    {
+      "account_value": 772290.326872,
+      "address": "0x5cb20485ede692b76ad1f12ee70d089437b99de8",
+      "avg_leverage": 4.0,
+      "avg_trade_duration_min": 23339,
+      "display_name": null,
+      "margin_type": "cross",
+      "most_traded_assets": [
+        "HYPE",
+        "BNB"
+      ],
+      "pnl": 483493.01,
+      "rank": 43,
+      "roi_all_time": 0.4730063705,
+      "trade_count": 247,
+      "volume_all_time": 5299130.54,
+      "win_rate": 0.81,
+      "win_rate_long": 0.0,
+      "win_rate_short": 0.86
+    },
+    {
+      "account_value": 1499333.240964,
+      "address": "0x025c62433ecf89ed45edf7f41bf05318204d0b2b",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 13569,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "@107",
+        "HYPE"
+      ],
+      "pnl": 482877.18,
+      "rank": 44,
+      "roi_all_time": 0.3092873808,
+      "trade_count": 842,
+      "volume_all_time": 52121493.21,
+      "win_rate": 0.54,
+      "win_rate_long": 0.6,
+      "win_rate_short": 0.14
+    },
+    {
+      "account_value": 108.601973,
+      "address": "0x94ac35f65bf72f20f1930a311e4a13d11dd018c5",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 122,
+      "display_name": "IlllllIIIIIIIllllllI",
+      "margin_type": null,
+      "most_traded_assets": [
+        "ETH",
+        "EIGEN"
+      ],
+      "pnl": 482488.35,
+      "rank": 45,
+      "roi_all_time": 5.0536637536,
+      "trade_count": 409,
+      "volume_all_time": 220659507.31,
+      "win_rate": 0.82,
+      "win_rate_long": 0.78,
+      "win_rate_short": 0.86
+    },
+    {
+      "account_value": 179859.595233,
+      "address": "0xea86184328ff06c14a9b235117dba0482f27c93b",
+      "avg_leverage": 2.0,
+      "avg_trade_duration_min": 1113,
+      "display_name": null,
+      "margin_type": "cross",
+      "most_traded_assets": [
+        "@107",
+        "KPEPE"
+      ],
+      "pnl": 481587.5,
+      "rank": 46,
+      "roi_all_time": 35.6977137294,
+      "trade_count": 1093,
+      "volume_all_time": 17663647.2,
+      "win_rate": 0.6,
+      "win_rate_long": 0.19,
+      "win_rate_short": 0.27
+    },
+    {
+      "account_value": 2.082651,
+      "address": "0x7d455df2115bc776bebe24565ead30abf4abf8c1",
+      "avg_leverage": null,
+      "avg_trade_duration_min": null,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "@107"
+      ],
+      "pnl": 481337.9,
+      "rank": 47,
+      "roi_all_time": 1.8734489805,
+      "trade_count": 945,
+      "volume_all_time": 37175437.63,
+      "win_rate": 0.66,
+      "win_rate_long": 0.0,
+      "win_rate_short": 0.0
+    },
+    {
+      "account_value": 89516.098222,
+      "address": "0xf8992a1f4e302460bd49a1646ee315d810235212",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 3406,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "XYZ:EWY",
+        "XYZ:SMSN"
+      ],
+      "pnl": 481271.31,
+      "rank": 48,
+      "roi_all_time": 14.3518162611,
+      "trade_count": 947,
+      "volume_all_time": 32355093.99,
+      "win_rate": 0.72,
+      "win_rate_long": 0.74,
+      "win_rate_short": 0.56
+    },
+    {
+      "account_value": 0.197627,
+      "address": "0x72743ae2822edd658c0c50608fd7c5c501b2afbd",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 12938,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "ETH",
+        "@107"
+      ],
+      "pnl": 480677.0,
+      "rank": 49,
+      "roi_all_time": 2.4033849881,
+      "trade_count": 282,
+      "volume_all_time": 11557400.89,
+      "win_rate": 0.76,
+      "win_rate_long": 0.71,
+      "win_rate_short": 0.74
+    },
+    {
+      "account_value": 1061448.470934,
+      "address": "0xccf343eef0c5f2590ee30efc9f564b33aeb3c7e6",
+      "avg_leverage": 3.2,
+      "avg_trade_duration_min": 2969,
+      "display_name": null,
+      "margin_type": "cross",
+      "most_traded_assets": [
+        "PUMP",
+        "ETH"
+      ],
+      "pnl": 480457.31,
+      "rank": 50,
+      "roi_all_time": 0.8268993573,
+      "trade_count": 263,
+      "volume_all_time": 33819998.2,
+      "win_rate": 0.58,
+      "win_rate_long": 0.46,
+      "win_rate_short": 0.69
+    },
+    {
+      "account_value": 0.029814,
+      "address": "0x951e064f4368a20552076f2d7dd17b92c187f4f0",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 1,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "TAO",
+        "POPCAT"
+      ],
+      "pnl": 479693.93,
+      "rank": 51,
+      "roi_all_time": 1.7907293319,
+      "trade_count": 1916,
+      "volume_all_time": 163311627.18,
+      "win_rate": 0.92,
+      "win_rate_long": 0.91,
+      "win_rate_short": 0.92
+    },
+    {
+      "account_value": 0.003815,
+      "address": "0x0fe28b4950ce9abe91301d8d44e719387f652785",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 4042,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "HYPE",
+        "BTC"
+      ],
+      "pnl": 479484.63,
+      "rank": 52,
+      "roi_all_time": 2.7576614478,
+      "trade_count": 906,
+      "volume_all_time": 64088399.300000004,
+      "win_rate": 0.8,
+      "win_rate_long": 0.98,
+      "win_rate_short": 0.59
+    },
+    {
+      "account_value": 84.902996,
+      "address": "0x2aa863b196f766ef15d20907627f3f8dfc40f874",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 129,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "BTC",
+        "SOL"
+      ],
+      "pnl": 479266.7,
+      "rank": 53,
+      "roi_all_time": 8.8371366539,
+      "trade_count": 757,
+      "volume_all_time": 186973382.05,
+      "win_rate": 0.57,
+      "win_rate_long": 0.57,
+      "win_rate_short": 0.52
+    },
+    {
+      "account_value": 395056.11314,
+      "address": "0x35abb893ab82dc890a8b1664e336473caeaed35a",
+      "avg_leverage": 20.0,
+      "avg_trade_duration_min": 3679,
+      "display_name": null,
+      "margin_type": "cross",
+      "most_traded_assets": [
+        "PURR/USDC",
+        "MATIC"
+      ],
+      "pnl": 478882.86,
+      "rank": 54,
+      "roi_all_time": 10.2041730817,
+      "trade_count": 569,
+      "volume_all_time": 3381471.6,
+      "win_rate": 0.52,
+      "win_rate_long": 0.44,
+      "win_rate_short": 0.47
+    },
+    {
+      "account_value": 928.998534,
+      "address": "0xc4c0b1bd74b9b29436e095ae2537c9c8fa0200aa",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 6905,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "@106",
+        "PURR"
+      ],
+      "pnl": 478743.77,
+      "rank": 55,
+      "roi_all_time": 2.2382038577,
+      "trade_count": 58,
+      "volume_all_time": 11796446.13,
+      "win_rate": 0.6,
+      "win_rate_long": 0.94,
+      "win_rate_short": 0.0
+    },
+    {
+      "account_value": 101.041346,
+      "address": "0x61e0841d103d77325e7743d1ff7117efe7c2c9f6",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 962,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "BTC",
+        "XRP"
+      ],
+      "pnl": 478484.41,
+      "rank": 56,
+      "roi_all_time": 13.6682757685,
+      "trade_count": 267,
+      "volume_all_time": 55947866.75,
+      "win_rate": 0.52,
+      "win_rate_long": 0.59,
+      "win_rate_short": 0.49
+    },
+    {
+      "account_value": 4.816106,
+      "address": "0xa13aa8a568dc2fba689caa479c08f3f13b682a36",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 1428,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "XPL",
+        "ASTER"
+      ],
+      "pnl": 478351.54,
+      "rank": 57,
+      "roi_all_time": 0.623052121,
+      "trade_count": 402,
+      "volume_all_time": 14755632.36,
+      "win_rate": 0.73,
+      "win_rate_long": 0.73,
+      "win_rate_short": 0.0
+    },
+    {
+      "account_value": 6.5e-05,
+      "address": "0xfb1438a061dfda58f94439807cc39c5d3c57930c",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 875,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "BTC",
+        "POPCAT"
+      ],
+      "pnl": 478140.37,
+      "rank": 58,
+      "roi_all_time": 0.5938927665,
+      "trade_count": 497,
+      "volume_all_time": 17497439.8,
+      "win_rate": 0.62,
+      "win_rate_long": 0.87,
+      "win_rate_short": 0.35
+    },
+    {
+      "account_value": 1702265.813779,
+      "address": "0xeac842b2214cfece3f0d288293da19f408d91ede",
+      "avg_leverage": 7.5,
+      "avg_trade_duration_min": 0,
+      "display_name": null,
+      "margin_type": "cross",
+      "most_traded_assets": [
+        "TON",
+        "NEAR"
+      ],
+      "pnl": 477737.76,
+      "rank": 59,
+      "roi_all_time": 0.2128856156,
+      "trade_count": 1919,
+      "volume_all_time": 380103957.54,
+      "win_rate": 0.69,
+      "win_rate_long": 0.78,
+      "win_rate_short": 0.64
+    },
+    {
+      "account_value": 478032.633643,
+      "address": "0xc1a2d8a1182bc200f3bf9529a89fe9249373d709",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 800,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "PURR/USDC",
+        "INJ"
+      ],
+      "pnl": 477566.51,
+      "rank": 60,
+      "roi_all_time": 25.7387797784,
+      "trade_count": 536,
+      "volume_all_time": 2593986.47,
+      "win_rate": 0.9,
+      "win_rate_long": 0.94,
+      "win_rate_short": 0.85
+    },
+    {
+      "account_value": 12611.235132,
+      "address": "0xad58ae5dbc928021fb6e9daba2602b3c4a2eb7ab",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 3877,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "XPL",
+        "BTC"
+      ],
+      "pnl": 476194.57,
+      "rank": 61,
+      "roi_all_time": 0.1205858706,
+      "trade_count": 69,
+      "volume_all_time": 197970666.48,
+      "win_rate": 0.86,
+      "win_rate_long": 0.96,
+      "win_rate_short": 0.57
+    },
+    {
+      "account_value": 0.231363,
+      "address": "0xb58e1eb8256689e47f589ba6f6a28657d997bf2f",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 3561,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "XYZ:CL",
+        "XYZ:XYZ100"
+      ],
+      "pnl": 475994.52,
+      "rank": 62,
+      "roi_all_time": 0.6723097551,
+      "trade_count": 902,
+      "volume_all_time": 60862959.39,
+      "win_rate": 0.77,
+      "win_rate_long": 0.98,
+      "win_rate_short": 0.02
+    },
+    {
+      "account_value": 64.249314,
+      "address": "0xe51cd0968035f4ea6bfa1c6e5ed99037bff7caac",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 128,
+      "display_name": "sanryu trader",
+      "margin_type": null,
+      "most_traded_assets": [
+        "HYPE",
+        "BTC"
+      ],
+      "pnl": 475844.89,
+      "rank": 63,
+      "roi_all_time": 15.8546696026,
+      "trade_count": 763,
+      "volume_all_time": 69808873.45,
+      "win_rate": 0.61,
+      "win_rate_long": 0.62,
+      "win_rate_short": 0.53
+    },
+    {
+      "account_value": 546905.477594,
+      "address": "0x3d240f2ac6ec95eb089020a025aa0963acf45e36",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 4942,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "HYPE",
+        "PURR/USDC"
+      ],
+      "pnl": 475540.07,
+      "rank": 64,
+      "roi_all_time": 2.5234611335,
+      "trade_count": 376,
+      "volume_all_time": 4675313.93,
+      "win_rate": 0.89,
+      "win_rate_long": 0.99,
+      "win_rate_short": 0.33
+    },
+    {
+      "account_value": 778066.662968,
+      "address": "0xf09c63a2b47d7b383ecc517a295727312384eaed",
+      "avg_leverage": 7.5,
+      "avg_trade_duration_min": 34797,
+      "display_name": null,
+      "margin_type": "cross",
+      "most_traded_assets": [
+        "PENDLE",
+        "@107"
+      ],
+      "pnl": 475061.92,
+      "rank": 65,
+      "roi_all_time": 0.6728877217,
+      "trade_count": 193,
+      "volume_all_time": 3749080.35,
+      "win_rate": 0.98,
+      "win_rate_long": 0.99,
+      "win_rate_short": 0.62
+    },
+    {
+      "account_value": 314288.016757,
+      "address": "0xcba2680d2fc87cd6ee404fafbd7a5efbd26b099c",
+      "avg_leverage": null,
+      "avg_trade_duration_min": null,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "@107"
+      ],
+      "pnl": 474672.93,
+      "rank": 66,
+      "roi_all_time": 0.626465432,
+      "trade_count": 174,
+      "volume_all_time": 918402.59,
+      "win_rate": 0.59,
+      "win_rate_long": 0.0,
+      "win_rate_short": 0.0
+    },
+    {
+      "account_value": 6426.287424,
+      "address": "0xfe636473dcb6d86bbbb6165dd4b080c2f0decc31",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 417,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "@104",
+        "@123"
+      ],
+      "pnl": 474425.8,
+      "rank": 67,
+      "roi_all_time": 1.0096584625,
+      "trade_count": 802,
+      "volume_all_time": 43266066.77999999,
+      "win_rate": 0.87,
+      "win_rate_long": 0.22,
+      "win_rate_short": 0.0
+    },
+    {
+      "account_value": 511001.104822,
+      "address": "0x598945346525e8cdcf6a8d441eb2c88bb36199b8",
+      "avg_leverage": 3.75,
+      "avg_trade_duration_min": 683,
+      "display_name": null,
+      "margin_type": "isolated",
+      "most_traded_assets": [
+        "BTC",
+        "ETH"
+      ],
+      "pnl": 474119.0,
+      "rank": 68,
+      "roi_all_time": 12.1986796011,
+      "trade_count": 735,
+      "volume_all_time": 256646404.77,
+      "win_rate": 0.73,
+      "win_rate_long": 0.63,
+      "win_rate_short": 0.99
+    },
+    {
+      "account_value": 473220.586458,
+      "address": "0xdf7bd71e7eb9ebf6a0f75e8f8f9b2740f4ef45f1",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 4,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "HYPE",
+        "TST"
+      ],
+      "pnl": 473817.96,
+      "rank": 69,
+      "roi_all_time": 52.5936903148,
+      "trade_count": 1073,
+      "volume_all_time": 11976429.23,
+      "win_rate": 0.79,
+      "win_rate_long": 0.79,
+      "win_rate_short": 0.79
+    },
+    {
+      "account_value": 235643.184393,
+      "address": "0xbbe9e1588a359337c3235de3b808da991cfc2efe",
+      "avg_leverage": 10.0,
+      "avg_trade_duration_min": 8192,
+      "display_name": null,
+      "margin_type": "isolated",
+      "most_traded_assets": [
+        "XYZ:GOOGL",
+        "BTC"
+      ],
+      "pnl": 473046.44,
+      "rank": 70,
+      "roi_all_time": 2.2786795419,
+      "trade_count": 845,
+      "volume_all_time": 28786826.65,
+      "win_rate": 0.68,
+      "win_rate_long": 0.82,
+      "win_rate_short": 0.16
+    },
+    {
+      "account_value": 85439.480119,
+      "address": "0x01a1c1717495e463c5d6f85ca9ab2275389b7b66",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 57,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "ETH",
+        "OP"
+      ],
+      "pnl": 472547.98,
+      "rank": 71,
+      "roi_all_time": 36.3003644355,
+      "trade_count": 930,
+      "volume_all_time": 97279328.23,
+      "win_rate": 0.92,
+      "win_rate_long": 0.97,
+      "win_rate_short": 0.9
+    },
+    {
+      "account_value": 0.456907,
+      "address": "0x69a93745c7ef085bd3f10a824433fb6c77e43a15",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 22,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "HYPE",
+        "@107"
+      ],
+      "pnl": 471350.87,
+      "rank": 72,
+      "roi_all_time": 166.7904049999,
+      "trade_count": 686,
+      "volume_all_time": 12904117.42,
+      "win_rate": 0.67,
+      "win_rate_long": 0.6,
+      "win_rate_short": 0.38
+    },
+    {
+      "account_value": 444112.776877,
+      "address": "0x3a1bf5746cf2c47e570ef4e6cca27be9cc0e6833",
+      "avg_leverage": 1.0,
+      "avg_trade_duration_min": 6714,
+      "display_name": null,
+      "margin_type": "isolated",
+      "most_traded_assets": [
+        "FARTCOIN",
+        "HYPE"
+      ],
+      "pnl": 471082.04,
+      "rank": 73,
+      "roi_all_time": 19.9639032795,
+      "trade_count": 1003,
+      "volume_all_time": 7955440.57,
+      "win_rate": 0.58,
+      "win_rate_long": 0.56,
+      "win_rate_short": 0.27
+    },
+    {
+      "account_value": 443772.872125,
+      "address": "0x21e631b41414249b72c8ecdd47f5a090f945a549",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 98,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "ETH",
+        "SOL"
+      ],
+      "pnl": 470886.12,
+      "rank": 74,
+      "roi_all_time": 86.8344330257,
+      "trade_count": 892,
+      "volume_all_time": 23847676.99,
+      "win_rate": 0.59,
+      "win_rate_long": 0.4,
+      "win_rate_short": 0.68
+    },
+    {
+      "account_value": 0.478116,
+      "address": "0x577ad1d3512b4def17c686eb2c08281d0e906d33",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 2,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "@230",
+        "XYZ:SILVER"
+      ],
+      "pnl": 470740.51,
+      "rank": 75,
+      "roi_all_time": 0.2062468446,
+      "trade_count": 1309,
+      "volume_all_time": 583132781.13,
+      "win_rate": 0.62,
+      "win_rate_long": 0.37,
+      "win_rate_short": 0.47
+    },
+    {
+      "account_value": 0.0,
+      "address": "0xaed55b0ebb566e4ed491f68ef0ec4e705c7a1523",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 20130,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "ATOM",
+        "FXS"
+      ],
+      "pnl": 470600.89,
+      "rank": 76,
+      "roi_all_time": 1.0482648654,
+      "trade_count": 285,
+      "volume_all_time": 13075230.18,
+      "win_rate": 0.96,
+      "win_rate_long": 0.95,
+      "win_rate_short": 1.0
+    },
+    {
+      "account_value": 1362621.254059,
+      "address": "0x0423b4b2acb4f219ae4a270abd5dde2360e455bb",
+      "avg_leverage": 4.5,
+      "avg_trade_duration_min": 2583,
+      "display_name": null,
+      "margin_type": "cross",
+      "most_traded_assets": [
+        "HYPE",
+        "EIGEN"
+      ],
+      "pnl": 470214.39,
+      "rank": 77,
+      "roi_all_time": 0.5159979364,
+      "trade_count": 741,
+      "volume_all_time": 72372444.35,
+      "win_rate": 0.56,
+      "win_rate_long": 0.61,
+      "win_rate_short": 0.36
+    },
+    {
+      "account_value": 316259.903907,
+      "address": "0x493364de7f4a39ed24f9c68ece229973f324d369",
+      "avg_leverage": 14.86,
+      "avg_trade_duration_min": 9,
+      "display_name": null,
+      "margin_type": "cross",
+      "most_traded_assets": [
+        "HYPE",
+        "BTC"
+      ],
+      "pnl": 470041.22,
+      "rank": 78,
+      "roi_all_time": 3.5418027606,
+      "trade_count": 1743,
+      "volume_all_time": 4682630404.75,
+      "win_rate": 0.54,
+      "win_rate_long": 0.4,
+      "win_rate_short": 0.74
+    },
+    {
+      "account_value": 384.389535,
+      "address": "0x348d25dbaa734f450f2d8a4b80de340d35ac2b84",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 335,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "ETH",
+        "SOL"
+      ],
+      "pnl": 469375.86,
+      "rank": 79,
+      "roi_all_time": 31.2897740341,
+      "trade_count": 1024,
+      "volume_all_time": 91606805.28,
+      "win_rate": 0.62,
+      "win_rate_long": 0.63,
+      "win_rate_short": 0.62
+    },
+    {
+      "account_value": 5.092394,
+      "address": "0xc780077a65f33d9d88b59bbf421d4d89b1fc12a0",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 4,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "BTC",
+        "@254"
+      ],
+      "pnl": 469163.11,
+      "rank": 80,
+      "roi_all_time": 62.0603891225,
+      "trade_count": 1028,
+      "volume_all_time": 31469716.4,
+      "win_rate": 0.57,
+      "win_rate_long": 0.56,
+      "win_rate_short": 0.58
+    },
+    {
+      "account_value": 668926.054387,
+      "address": "0xf436d47f962e4acd96eb6d87677db91d5f40a204",
+      "avg_leverage": 15.0,
+      "avg_trade_duration_min": 29963,
+      "display_name": null,
+      "margin_type": "cross",
+      "most_traded_assets": [
+        "INJ",
+        "BTC"
+      ],
+      "pnl": 468898.09,
+      "rank": 81,
+      "roi_all_time": 2.344162758,
+      "trade_count": 130,
+      "volume_all_time": 4441990.51,
+      "win_rate": 0.95,
+      "win_rate_long": 0.75,
+      "win_rate_short": 0.96
+    },
+    {
+      "account_value": 129523.342028,
+      "address": "0x14ceba5f5eb19123654347dc99d6bf1e2d3e71ca",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 1839,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "BTC",
+        "ETH"
+      ],
+      "pnl": 468734.9,
+      "rank": 82,
+      "roi_all_time": 46.5441995373,
+      "trade_count": 501,
+      "volume_all_time": 8170141.63,
+      "win_rate": 0.53,
+      "win_rate_long": 0.53,
+      "win_rate_short": 0.57
+    },
+    {
+      "account_value": 158599.211359,
+      "address": "0x86d2161a18a6eb5be550d5253496e5a161cdf731",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 204,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "BTC",
+        "MON"
+      ],
+      "pnl": 468713.31,
+      "rank": 83,
+      "roi_all_time": 31.6950438765,
+      "trade_count": 836,
+      "volume_all_time": 108655378.33,
+      "win_rate": 0.68,
+      "win_rate_long": 0.71,
+      "win_rate_short": 0.57
+    },
+    {
+      "account_value": 706670.343714,
+      "address": "0x1ba6b82641c77ab1fc7bc734c5c3628199a8967d",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 822,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "BTC",
+        "ETH"
+      ],
+      "pnl": 468134.22,
+      "rank": 84,
+      "roi_all_time": 1.9625297091,
+      "trade_count": 545,
+      "volume_all_time": 25426442.06,
+      "win_rate": 0.67,
+      "win_rate_long": 0.67,
+      "win_rate_short": 0.0
+    },
+    {
+      "account_value": 233776.545905,
+      "address": "0xe9c2df5b14c7f476e8a5895d5b0c6b015e87bf2e",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 4159,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "TON",
+        "ZEREBRO"
+      ],
+      "pnl": 467930.68,
+      "rank": 85,
+      "roi_all_time": 5.5338165801,
+      "trade_count": 666,
+      "volume_all_time": 66199809.93,
+      "win_rate": 0.81,
+      "win_rate_long": 0.64,
+      "win_rate_short": 0.93
+    },
+    {
+      "account_value": 8.21797,
+      "address": "0x1391e15f710b582d6871da066357c78b6a541aee",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 2113,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "PURR/USDC",
+        "ONDO"
+      ],
+      "pnl": 467804.89,
+      "rank": 86,
+      "roi_all_time": 5.3591434988,
+      "trade_count": 988,
+      "volume_all_time": 10873933.11,
+      "win_rate": 0.84,
+      "win_rate_long": 0.53,
+      "win_rate_short": 0.9
+    },
+    {
+      "account_value": 132967.12033,
+      "address": "0xc34aaa98cd098f03fa53dbffb468414cae2fdd18",
+      "avg_leverage": null,
+      "avg_trade_duration_min": null,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "@107"
+      ],
+      "pnl": 467703.24,
+      "rank": 87,
+      "roi_all_time": 0.306977326,
+      "trade_count": 2000,
+      "volume_all_time": 2522164.93,
+      "win_rate": 1.0,
+      "win_rate_long": 0.0,
+      "win_rate_short": 0.0
+    },
+    {
+      "account_value": 0.742566,
+      "address": "0x4adb2981e42241e268e0ef4711af9f0daee0e32e",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 1367,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "BTC",
+        "ETH"
+      ],
+      "pnl": 466677.42,
+      "rank": 88,
+      "roi_all_time": 41.9971512765,
+      "trade_count": 524,
+      "volume_all_time": 14245675.23,
+      "win_rate": 0.56,
+      "win_rate_long": 0.45,
+      "win_rate_short": 0.38
+    },
+    {
+      "account_value": 1052643.744446,
+      "address": "0xb3fe34bfb501665f4329915a7024ba5a6bec495f",
+      "avg_leverage": 6.67,
+      "avg_trade_duration_min": 40114,
+      "display_name": null,
+      "margin_type": "cross",
+      "most_traded_assets": [
+        "UNI",
+        "PURR"
+      ],
+      "pnl": 466468.01,
+      "rank": 89,
+      "roi_all_time": 0.795781863,
+      "trade_count": 164,
+      "volume_all_time": 3564527.54,
+      "win_rate": 0.77,
+      "win_rate_long": 0.91,
+      "win_rate_short": 0.04
+    },
+    {
+      "account_value": 155907.38244,
+      "address": "0x33cd83ca975dfe9fce7111eeb644f4fd0c558ad9",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 11847,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "PURR",
+        "PURR/USDC"
+      ],
+      "pnl": 464436.37,
+      "rank": 90,
+      "roi_all_time": 1.0340068838,
+      "trade_count": 629,
+      "volume_all_time": 8301922.8,
+      "win_rate": 0.83,
+      "win_rate_long": 1.0,
+      "win_rate_short": 0.98
+    },
+    {
+      "account_value": 9.409543,
+      "address": "0xe69c98f47c901e9ad40419111a8e450a226c7992",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 1774,
+      "display_name": "THANK YOU JEFF",
+      "margin_type": null,
+      "most_traded_assets": [
+        "@107",
+        "HYPE"
+      ],
+      "pnl": 463862.26,
+      "rank": 91,
+      "roi_all_time": 0.2650090618,
+      "trade_count": 757,
+      "volume_all_time": 209712737.09,
+      "win_rate": 0.59,
+      "win_rate_long": 0.57,
+      "win_rate_short": 0.28
+    },
+    {
+      "account_value": 4262.443551,
+      "address": "0xbd91ed15a05372a1fa9f9dc472c7506ae946fd8b",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 12535,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "PURR/USDC",
+        "@107"
+      ],
+      "pnl": 463612.41,
+      "rank": 92,
+      "roi_all_time": 20.5719115091,
+      "trade_count": 886,
+      "volume_all_time": 100322259.62,
+      "win_rate": 0.84,
+      "win_rate_long": 0.77,
+      "win_rate_short": 0.68
+    },
+    {
+      "account_value": 672558.199788,
+      "address": "0x69734444a9c9954c21d83b5f062802909dc5112b",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 448,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "PAXG",
+        "@107"
+      ],
+      "pnl": 463518.92,
+      "rank": 93,
+      "roi_all_time": 0.8883370155,
+      "trade_count": 1154,
+      "volume_all_time": 49120905.84,
+      "win_rate": 0.65,
+      "win_rate_long": 0.79,
+      "win_rate_short": 0.59
+    },
+    {
+      "account_value": 323527.761405,
+      "address": "0x764cf4bc017d4849c80663644914b7190e523c7a",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 1559,
+      "display_name": "paulypaul",
+      "margin_type": null,
+      "most_traded_assets": [
+        "XYZ:XYZ100",
+        "WLFI"
+      ],
+      "pnl": 463136.07,
+      "rank": 94,
+      "roi_all_time": 0.5710808975,
+      "trade_count": 942,
+      "volume_all_time": 78494011.06,
+      "win_rate": 0.53,
+      "win_rate_long": 0.43,
+      "win_rate_short": 0.72
+    },
+    {
+      "account_value": 6.790351,
+      "address": "0xd1241baafd0b19ed5a217be28bc6d07c8f937bc1",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 744,
+      "display_name": "HyperBear",
+      "margin_type": null,
+      "most_traded_assets": [
+        "@107",
+        "PURR/USDC"
+      ],
+      "pnl": 463035.38,
+      "rank": 95,
+      "roi_all_time": 18.3333806002,
+      "trade_count": 809,
+      "volume_all_time": 28378961.93,
+      "win_rate": 0.68,
+      "win_rate_long": 0.67,
+      "win_rate_short": 0.37
+    },
+    {
+      "account_value": 421316.551229,
+      "address": "0x9d0d6552288ba41aa852a9f3e11cc32a9b5254e0",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 5127,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "TIA",
+        "@230"
+      ],
+      "pnl": 462070.99,
+      "rank": 96,
+      "roi_all_time": 20.0632978486,
+      "trade_count": 123,
+      "volume_all_time": 822742.6,
+      "win_rate": 0.64,
+      "win_rate_long": 0.6,
+      "win_rate_short": 0.17
+    },
+    {
+      "account_value": 9.95688,
+      "address": "0x562aeae4f8e07742eb763ed603e487f66fc25087",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 1335,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "ENA",
+        "HYPE"
+      ],
+      "pnl": 461891.26,
+      "rank": 97,
+      "roi_all_time": 0.8955926253,
+      "trade_count": 1193,
+      "volume_all_time": 51326392.96,
+      "win_rate": 0.68,
+      "win_rate_long": 0.74,
+      "win_rate_short": 0.65
+    },
+    {
+      "account_value": 236876.95513,
+      "address": "0xe86f2426700e6e1d52aac402591622ad12aff442",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 2300,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "@107",
+        "PURR/USDC"
+      ],
+      "pnl": 461370.68,
+      "rank": 98,
+      "roi_all_time": 16.1548652951,
+      "trade_count": 1069,
+      "volume_all_time": 5628699.67,
+      "win_rate": 0.77,
+      "win_rate_long": 0.0,
+      "win_rate_short": 0.71
+    },
+    {
+      "account_value": 142002.659288,
+      "address": "0x860e468ca7716dfa0deb4fc84459a74b3974e5c5",
+      "avg_leverage": null,
+      "avg_trade_duration_min": 22731,
+      "display_name": null,
+      "margin_type": null,
+      "most_traded_assets": [
+        "BNB",
+        "ENA"
+      ],
+      "pnl": 460787.92,
+      "rank": 99,
+      "roi_all_time": 1.2102209815,
+      "trade_count": 451,
+      "volume_all_time": 11578207.290000001,
+      "win_rate": 0.98,
+      "win_rate_long": 0.98,
+      "win_rate_short": 0.99
+    },
+    {
+      "account_value": 594348.962914,
+      "address": "0x09b57c3f9db5e61ced66dca927ec2e2b34f1b6fb",
+      "avg_leverage": 12.0,
+      "avg_trade_duration_min": 1410,
+      "display_name": null,
+      "margin_type": "cross",
+      "most_traded_assets": [
+        "HYPE",
+        "@85"
+      ],
+      "pnl": 460041.63,
+      "rank": 100,
+      "roi_all_time": 1.7857595851,
+      "trade_count": 994,
+      "volume_all_time": 27181790.74,
+      "win_rate": 0.82,
+      "win_rate_long": 0.83,
+      "win_rate_short": 0.58
+    }
+  ]
+}

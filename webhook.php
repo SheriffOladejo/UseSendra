@@ -3,7 +3,7 @@
 error_reporting(E_ALL);
 ini_set('display_errors', 0); // FIXED: was 1 — PHP errors in response body break WhatsApp's 200 check
 ini_set('log_errors', 1);
-ini_set('error_log', '/var/www/html/php-debug.log');
+//ini_set('error_log', '/var/www/html/php-debug.log');
 
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
@@ -33,8 +33,17 @@ $ACCESS_TOKEN = $_ENV['WHATSAPP_ACCESS_TOKEN'] ?? getenv('WHATSAPP_ACCESS_TOKEN'
 $SENDRA_APTOS_PHONE_ID = $_ENV['WHATSAPP_APTOS_PHONE_NUMBER_ID'] ?? getenv('WHATSAPP_APTOS_PHONE_NUMBER_ID') ?: '851265871413834';
 $SENDRA_LOGISTICS_PHONE_ID = $_ENV['WHATSAPP_LOGISTICS_PHONE_NUMBER_ID'] ?? getenv('WHATSAPP_LOGISTICS_PHONE_NUMBER_ID') ?: '1097784993409171';
 
-$input = json_decode(file_get_contents('php://input'), true);
-$incomingPhoneNumberId = $input['entry'][0]['changes'][0]['value']['metadata']['phone_number_id'] ?? $SENDRA_APTOS_PHONE_ID;
+// Read POST body once: php://input is not reliably re-readable; deposit JSON has no `entry` tree.
+$postRawBody = '';
+$postJson    = [];
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $postRawBody = file_get_contents('php://input') ?: '';
+    $postJson    = json_decode($postRawBody, true) ?: [];
+}
+$incomingPhoneNumberId = $SENDRA_APTOS_PHONE_ID;
+if (!empty($postJson['entry'][0]['changes'][0]['value']['metadata']['phone_number_id'])) {
+    $incomingPhoneNumberId = $postJson['entry'][0]['changes'][0]['value']['metadata']['phone_number_id'];
+}
 
 $bot = $botConfigs[$incomingPhoneNumberId] ?? null;
 
@@ -90,7 +99,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
 
 // ── POST: All incoming requests ───────────────────────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $body       = file_get_contents("php://input");
+    $body       = $postRawBody;
     $requestUri = $_SERVER['REQUEST_URI'];
 
     error_log("=== WEBHOOK HIT: $requestUri === $body");

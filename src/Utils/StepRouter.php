@@ -51,7 +51,6 @@ use App\Steps\Driver\DriverRejectedStep;
 use App\Steps\Driver\VehicleBrandStep;
 use App\Steps\Driver\VehiclePictureStep;
 use App\Steps\Driver\LicensePictureStep;
-use App\Steps\Driver\InReviewStep;
 use App\Steps\Driver\RiderApprovedStep;
 use App\Steps\Logistics\ReviewPendingStep;
 use App\Steps\Logistics\LogisticsActiveJobStep;
@@ -78,7 +77,6 @@ class StepRouter
         'confirm_location' => ConfirmLocationStep::class,
         'rider_update_location' => UpdateLocationStep::class,
         'rider_update_location_confirm' => UpdateLocationConfirmStep::class,
-        'in_review' => InReviewStep::class,
         'rider_approved' => RiderApprovedStep::class,
         'driver_rejected' => DriverRejectedStep::class,
         'driver_enter_counter' => CounterOfferStep::class,
