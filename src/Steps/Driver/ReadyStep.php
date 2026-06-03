@@ -3,64 +3,60 @@
 namespace App\Steps\Driver;
 
 use App\Steps\BaseStep;
-use App\Utils\Translator;
 
+/**
+ * Idle “home” for approved riders waiting for job offers (step key: rider_ready).
+ * Do not change drivers.status here — job matching requires status = active.
+ */
 class ReadyStep extends BaseStep
 {
     protected string $validationError;
 
-    /**
-     * Handle final rider onboarding confirmation
-     */
     public function handle(array $session, $message): string
     {
         $phone = $session['phone_number'];
-        $lang  = $session['language'] ?? 'en';
-        $t     = new Translator($lang);
+        $m = strtolower(trim((string) $message));
 
-        // Update rider status in DB to 'ready'
-        $this->driverModel->update($phone, [
-            'status' => 'ready'
-        ]);
+        if (in_array($m, ['update_location', 'update location'], true)) {
+            $this->nextStep($phone, 'rider_update_location');
+            return "📍 Please share your preferred bus-stop location so we can send delivery requests near you.\n\n"
+                . "Use WhatsApp's location feature:\n"
+                . "1. Tap the '➕' icon (iOS) or the '📎' icon (Android)\n"
+                . "2. Select 'Location'\n"
+                . "3. Search on the map or send your current location.";
+        }
 
-        // Mark step as complete
-        //$this->nextStep($phone, 'rider_ready');
-
-        // Send review info message (multilingual)
-        $this->whatsappService->sendMessage(
+        $this->whatsappService->sendListMessage(
             $phone,
-            $t->get('in_review_message')
+            "🚚 *Sendra rider* — you’re online\n\n"
+            . "💰 *Wallet* — tap below for balance, add money, withdraw, or activity history.",
+            'Wallet',
+            [
+                'balance' => 'Check balance',
+                'fund' => 'Add money',
+                'withdraw' => 'Withdraw',
+                'history' => 'Activity history',
+            ]
+        );
+
+        $this->whatsappService->sendButtonMessage(
+            $phone,
+            "*Jobs*\n"
+            . "• *Accept* / *Counter* / *Decline* on each offer\n"
+            . "• Sender confirms you at pickup (QR photo)\n"
+            . "• At dropoff, type the receiver’s *4-digit code*\n"
+            . "• Share a map pin if the customer asks for your location\n\n"
+            . "Update your bus-stop when you move so offers stay nearby.",
+            [
+                'update_location' => '📍 Update location',
+            ]
         );
 
         return '';
     }
 
-    /**
-     * Validate input for this step (any input is fine)
-     */
     public function validateInput($message): bool
     {
         return true;
-    }
-
-    /**
-     * Optional: format timestamp into "x minutes/hours/days ago"
-     */
-    private function formatTimeAgo(int $timestamp): string
-    {
-        $diff = time() - $timestamp;
-
-        if ($diff < 60) {
-            return 'just now';
-        } elseif ($diff < 3600) {
-            $mins = floor($diff / 60);
-            return $mins . ' minute' . ($mins > 1 ? 's' : '') . ' ago';
-        } elseif ($diff < 86400) {
-            $hours = floor($diff / 3600);
-            return $hours . ' hour' . ($hours > 1 ? 's' : '') . ' ago';
-        } else {
-            $days = floor($diff / 86400);
-            return $days . ' day' . ($days > 1 ? 's' : '') . ' ago';
-        }
     }
 }

@@ -47,15 +47,15 @@ return [
     'nin_invalid' => "Please enter a valid 11-digit NIN number.",
 
     // Phone Step
-    'phone_prompt' => "Excellent🎯! Where do you usually operate from?  (This will help us route orders to you easily). \n\nUse Whatsapp's location📍 feature to select the location on the map\n1. Tap the '+' icon\n2. Select 'Location'\n3. Choose 'Send your current location' or pick a spot on the map\n\nNo worries, you can always change it anytime",
+    'phone_prompt' => "Excellent🎯! Where do you usually operate from?  (This will help us route orders to you easily). \n\nUse WhatsApp's location📍 feature to select the location on the map\n1. Tap the '➕' icon (iOS) or the '📎' icon (Android)\n2. Select 'Location'\n3. Choose 'Send your current location' or pick a spot on the map\n\nNo worries, you can always change it anytime",
     'phone_invalid' => "Please enter a valid phone number.",
     'rider_location_request' =>
-    "Excellent 🎯! Where do you usually operate from?\n\nSend your location 📍:\n1. Tap '+'\n2. Choose 'Location'\n3. Send current location or pick a spot.\n\nYou can change it anytime.",
+    "Excellent 🎯! Where do you usually operate from?\n\nSend your location 📍:\n1. Tap the '➕' icon (iOS) or the '📎' icon (Android)\n2. Choose 'Location'\n3. Send current location or pick a spot.\n\nYou can change it anytime.",
 
     'invalid_phone' => "Please enter a valid phone number.",
 
     // Location Steps
-    'location_not_found' => "📍 We couldn't get your location. \n\nPlease use WhatsApp's location sharing feature:\n1. Tap the '+' icon\n2. Select 'Location'\n3. Choose 'Send your current location' or pick a spot on the map\n\nThis helps us send you nearby ride requests!",
+    'location_not_found' => "📍 We couldn't get your location. \n\nPlease use WhatsApp's location sharing feature:\n1. Tap the '➕' icon (iOS) or the '📎' icon (Android)\n2. Select 'Location'\n3. Choose 'Send your current location' or pick a spot on the map\n\nThis helps us send you nearby ride requests!",
     'location_confirm_button' => "If it's correct tap *Confirm*. Otherwise send a new location.",
     'location_invalid' => "📍 We couldn't get your location. Please send your location via WhatsApp.",
     'location_confirm_prompt' => "Is this your preferred bus-stop location📍?",
@@ -67,6 +67,7 @@ return [
     'vehicle_prompt'               => "Great! 🚀\nNow tell us which vehicle you use for deliveries.",
     'vehicle_motorcycle'           => "🏍️ Motorcycle",
     'vehicle_keke'                 => "🛺 Keke",
+    'vehicle_bicycle'              => "🚲 Bicycle",
 
     // License Steps
     'license_number_invalid' => "Please enter a valid driver's license number.",
@@ -90,6 +91,9 @@ return [
     'invalid_vehicle_type' => "Sorry, that's not a valid vehicle type. Please choose one of the following:",
     'vehicle_motorcycle'  => "🏍️ Motorcycle",
     'vehicle_keke'        => "🛺 Keke",
+    'vehicle_bicycle'     => "🚲 Bicycle",
+    'bicycle_onboarding_nin_prompt' => "Excellent! 🎯\n\nBicycle riders don't need a driver's licence or plate number.\n\nWe'll verify your NIN first — enter your *11-digit NIN* (numbers only), or type *skip*.",
+    'bicycle_vehicle_picture_prompt' => "📷 Send a clear photo of your bicycle (side view, good lighting).\n\nTap ➕ then Camera or Gallery.",
     
     // Selfie Step
     'selfie_invalid' => "Please send a valid image. Make sure to send it as a photo attachment.",

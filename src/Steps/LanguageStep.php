@@ -22,36 +22,7 @@ class LanguageStep extends BaseStep
         $selectedLang = strtolower(trim($message));
 
         if (!array_key_exists($selectedLang, $this->languages)) {
-            // Send buttons in batches of 3
-            $keys = array_keys($this->languages);
-            $firstBatch = array_slice($keys, 0, 3);
-            $secondBatch = array_slice($keys, 3);
-
-            $buttons1 = [];
-            foreach ($firstBatch as $key) {
-                $buttons1[$key] = $this->languages[$key];
-            }
-
-            $this->whatsappService->sendButtonMessage(
-                $phone,
-                "Welcome to Sendra Logistics! 🌟\nPlease select your preferred language:",
-                $buttons1
-            );
-
-            // If there’s a second batch, send it in a separate message
-            if (!empty($secondBatch)) {
-                $buttons2 = [];
-                foreach ($secondBatch as $key) {
-                    $buttons2[$key] = $this->languages[$key];
-                }
-
-                $this->whatsappService->sendButtonMessage(
-                    $phone,
-                    "More languages:",
-                    $buttons2
-                );
-            }
-
+            $this->sendLanguageSelectionButtons($phone);
             return '';
         }
 
@@ -87,5 +58,44 @@ class LanguageStep extends BaseStep
     public function validateInput(string $message): bool
     {
         return array_key_exists(strtolower(trim($message)), $this->languages);
+    }
+
+    public function sendValidationFailureFeedback(string $phoneNumber): void
+    {
+        $err = trim($this->getValidationError());
+        if ($err !== '') {
+            $this->whatsappService->sendMessage($phoneNumber, $err);
+        }
+        $this->sendLanguageSelectionButtons($phoneNumber);
+    }
+
+    private function sendLanguageSelectionButtons(string $phone): void
+    {
+        $keys        = array_keys($this->languages);
+        $firstBatch  = array_slice($keys, 0, 3);
+        $secondBatch = array_slice($keys, 3);
+
+        $buttons1 = [];
+        foreach ($firstBatch as $key) {
+            $buttons1[$key] = $this->languages[$key];
+        }
+
+        $this->whatsappService->sendButtonMessage(
+            $phone,
+            "Welcome to Sendra Logistics! 🌟\nPlease select your preferred language:",
+            $buttons1
+        );
+
+        if ($secondBatch !== []) {
+            $buttons2 = [];
+            foreach ($secondBatch as $key) {
+                $buttons2[$key] = $this->languages[$key];
+            }
+            $this->whatsappService->sendButtonMessage(
+                $phone,
+                'More languages:',
+                $buttons2
+            );
+        }
     }
 }

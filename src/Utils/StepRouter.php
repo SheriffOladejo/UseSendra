@@ -6,7 +6,6 @@ use App\Services\WhatsAppService;
 use App\Models\Session;
 use App\Models\DeliveryRequest;
 
-use App\Steps\LanguageStep;
 use App\Steps\StartStep;
 use App\Steps\ChooseRoleStep;
 
@@ -31,6 +30,8 @@ use App\Steps\User\DropoffAddressStep;
 use App\Steps\User\ChooseOfferStep;
 
 use App\Steps\User\FindCourierStep;
+use App\Steps\User\PackingChecklistStep;
+use App\Steps\User\EditOrderStep;
 use App\Steps\Driver\LocationPreferenceStep;
 use App\Steps\Driver\VehicleTypeStep;
 use App\Steps\Driver\ReadyStep;
@@ -40,6 +41,8 @@ use App\Steps\Driver\VehicleColorStep;
 use App\Steps\Driver\PhoneStep;
 use App\Steps\Driver\FullNameStep;
 use App\Steps\Driver\ConfirmLocationStep;
+use App\Steps\Driver\UpdateLocationStep;
+use App\Steps\Driver\UpdateLocationConfirmStep;
 use App\Steps\Driver\CounterOfferStep;
 
 use App\Models\LogisticsDriver;
@@ -48,15 +51,15 @@ use App\Steps\Driver\DriverRejectedStep;
 use App\Steps\Driver\VehicleBrandStep;
 use App\Steps\Driver\VehiclePictureStep;
 use App\Steps\Driver\LicensePictureStep;
-use App\Steps\Driver\InReviewStep;
 use App\Steps\Driver\RiderApprovedStep;
+use App\Steps\Logistics\ReviewPendingStep;
+use App\Steps\Logistics\LogisticsActiveJobStep;
 
 class StepRouter
 {
     private $steps = [
 
-        // onboarding
-        'language' => LanguageStep::class,
+        // onboarding (language step disabled — restore LanguageStep mapping when bringing it back)
         'start' => StartStep::class,
         'choose_role' => ChooseRoleStep::class,
         'sender_menu' => ShowMenuStep::class,
@@ -72,7 +75,8 @@ class StepRouter
         'nin' => NINStep::class,
         'rider_location_preference' => LocationPreferenceStep::class,
         'confirm_location' => ConfirmLocationStep::class,
-        'in_review' => InReviewStep::class,
+        'rider_update_location' => UpdateLocationStep::class,
+        'rider_update_location_confirm' => UpdateLocationConfirmStep::class,
         'rider_approved' => RiderApprovedStep::class,
         'driver_rejected' => DriverRejectedStep::class,
         'driver_enter_counter' => CounterOfferStep::class,
@@ -88,6 +92,7 @@ class StepRouter
         'item_name' => ItemNameStep::class,
         'item_description' => ItemDescriptionStep::class,
         'item_picture' => ItemPictureStep::class,
+        'packing_checklist' => PackingChecklistStep::class,
         'sender_phone' => SenderPhoneStep::class,
         'receiver_phone' => ReceiverPhoneStep::class,
         'sender_vehicle_type' => UserVehicleTypeStep::class,
@@ -98,7 +103,14 @@ class StepRouter
         'payment_method' => PaymentMethodStep::class,
 
         'summary' => ConfirmationStep::class,
+        'edit_order' => EditOrderStep::class,
         'rider_ready' => ReadyStep::class,
+
+        'logistics_review_rider' => ReviewPendingStep::class,
+        'logistics_review_customer' => ReviewPendingStep::class,
+
+        'awaiting_dropoff_pin' => LogisticsActiveJobStep::class,
+        'awaiting_location_share' => LogisticsActiveJobStep::class,
     ];
 
     private $sessionModel;

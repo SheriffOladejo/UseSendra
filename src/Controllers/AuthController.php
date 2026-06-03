@@ -3,6 +3,7 @@
 namespace App\Controllers;
 
 use App\Models\User;
+use App\Services\NoditWebhookService;
 use App\Services\WhatsAppService;
 
 class AuthController
@@ -50,6 +51,7 @@ class AuthController
 
         if ($userId) {
             error_log("New {$accountType} user registered: {$username} ({$phoneNumber})");
+            $this->registerNoditDepositWebhooks($phoneNumber, $aptosAddress);
             if (!$isLogistics) {
                 $this->whatsappService->sendSignupSuccessMessage($phoneNumber, $username);
             }
@@ -116,5 +118,23 @@ class AuthController
     public function getUserModel(): User
     {
         return $this->userModel;
+    }
+
+    private function registerNoditDepositWebhooks(string $phoneNumber, string $aptosAddress): void
+    {
+        try {
+            $nodit = new NoditWebhookService();
+            if (!$nodit->isConfigured()) {
+                return;
+            }
+            $subs = $nodit->registerWalletDeposits($aptosAddress, $phoneNumber);
+            if ($subs !== null) {
+                $this->userModel->update($phoneNumber, [
+                    'nodit_webhook_subscriptions' => json_encode($subs),
+                ]);
+            }
+        } catch (\Throwable $e) {
+            error_log('Nodit webhook registration failed: ' . $e->getMessage());
+        }
     }
 }

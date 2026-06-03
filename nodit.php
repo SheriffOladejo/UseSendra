@@ -4,17 +4,22 @@
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
 
-// Database configuration
-$DB_HOST = 'localhost';
-$DB_NAME = 'sendra_db';
-$DB_USER = 'developer';
-$DB_PASS = 'Stipendly@2026';
+require __DIR__ . '/vendor/autoload.php';
+require __DIR__ . '/config/bootstrap_env.php';
+
+use App\Services\WebhookAuthService;
+
+$LOG_FILE = (string) ($_ENV['NODIT_WEBHOOK_LOG'] ?? getenv('NODIT_WEBHOOK_LOG') ?: '/var/www/html/nodit-webhook.log');
+@ini_set('log_errors', '1');
+@ini_set('error_log', $LOG_FILE);
+
+$DB_HOST = $_ENV['APTOS_DB_HOST'] ?? getenv('APTOS_DB_HOST') ?: 'localhost';
+$DB_NAME = $_ENV['APTOS_DB_NAME'] ?? getenv('APTOS_DB_NAME') ?: 'sendra_db';
+$DB_USER = $_ENV['APTOS_DB_USER'] ?? getenv('APTOS_DB_USER') ?: 'developer';
+$DB_PASS = $_ENV['APTOS_DB_PASS'] ?? getenv('APTOS_DB_PASS') ?: '';
 
 // WhatsApp webhook URL
 $WHATSAPP_WEBHOOK_URL = 'https://coinectra.stipendly.app/webhook.php?action=deposit';
-
-// Log file
-$LOG_FILE = '/var/www/html/nodit-webhook.log';
 
 // Known coin types
 $COIN_TYPES = [
@@ -22,11 +27,10 @@ $COIN_TYPES = [
     '0x5724aca06f8bd505e9eaf2337d16d6fc310c96ecfd331269bf2f76840d3f355a' => 'USDT'
 ];
 
-// Log function
+// Log function (Nodit only — do not echo to the global error_log / php-debug.log)
 function logMessage($message) {
     global $LOG_FILE;
-    file_put_contents($LOG_FILE, date("c") . " - " . $message . "\n", FILE_APPEND);
-    error_log($message);
+    //file_put_contents($LOG_FILE, date("c") . " - " . $message . "\n", FILE_APPEND);
 }
 
 logMessage("=== Nodit Webhook Received ===");
@@ -80,8 +84,12 @@ function processTransaction($data) {
         return;
     }
 
-    // Check if this is a deposit event
-    if (!isset($event['eventType']) || $event['eventType'] !== '0x1::fungible_asset::Deposit') {
+    $stablecoinDeposit = '0x72d1e6aa6a648a3afc5d45d8d66b353f1e1837a728c0813beec77f28a697fa7a::stablecoin::Deposit';
+    $depositEventTypes = [
+        '0x1::fungible_asset::Deposit',
+        $stablecoinDeposit,
+    ];
+    if (!isset($event['eventType']) || !in_array($event['eventType'], $depositEventTypes, true)) {
         logMessage("Not a deposit event: " . ($event['eventType'] ?? 'unknown'));
         return;
     }
@@ -100,9 +108,19 @@ function processTransaction($data) {
             continue;
         }
 
-        // Look for deposit events
+        $hasStablecoinDeposit = false;
         foreach ($message['events'] as $evt) {
-            if ($evt['type'] === '0x1::fungible_asset::Deposit') {
+            if (($evt['type'] ?? '') === $stablecoinDeposit) {
+                $hasStablecoinDeposit = true;
+                break;
+            }
+        }
+
+        foreach ($message['events'] as $evt) {
+            $type = $evt['type'] ?? '';
+            if ($type === $stablecoinDeposit) {
+                processDepositEvent($evt, $message, $network, $protocol);
+            } elseif ($type === '0x1::fungible_asset::Deposit' && !$hasStablecoinDeposit) {
                 processDepositEvent($evt, $message, $network, $protocol);
             }
         }
@@ -119,9 +137,28 @@ function processDepositEvent($depositEvent, $message, $network, $protocol) {
     $amount = $depositData['amount'] ?? 0;
     $store = $depositData['store'] ?? '';
 
+    $payload = $message['payload'] ?? [];
+    // Sendra script_payload transfers emit two Deposit legs (main + fee/sponsor); notify once for the main amount.
+    if (($payload['type'] ?? '') === 'script_payload') {
+        $args = $payload['arguments'] ?? [];
+        if (isset($args[1], $args[3]) && (string) $args[1] !== (string) $args[3]) {
+            if ((string) $amount === (string) $args[3]) {
+                logMessage("Skipping script_payload fee/auxiliary deposit leg amount=$amount");
+                return;
+            }
+        }
+    }
+
     // Try to get recipient address from multiple sources
     $recipientAddress = null;
     $currency = 'UNKNOWN';
+
+    $stablecoinDeposit = '0x72d1e6aa6a648a3afc5d45d8d66b353f1e1837a728c0813beec77f28a697fa7a::stablecoin::Deposit';
+    if (($depositEvent['type'] ?? '') === $stablecoinDeposit) {
+        $recipientAddress = $depositEvent['data']['store_owner'] ?? null;
+        $currency = 'USDC';
+        logMessage("Found recipient from stablecoin::Deposit: $recipientAddress");
+    }
 
     // Method 1: Check for custom stablecoin event (works for some USDC transactions)
     foreach ($message['events'] as $evt) {
@@ -160,6 +197,32 @@ function processDepositEvent($depositEvent, $message, $network, $protocol) {
                         $recipientAddress = $args[1];
                         logMessage("Found recipient from payload arguments: $recipientAddress");
                     }
+                }
+            }
+        }
+
+        // Method 2b: Sendra script_payload (USDT path has no stablecoin::Deposit; USDC may use same script)
+        if (!$recipientAddress && ($payload['type'] ?? '') === 'script_payload') {
+            $args = $payload['arguments'] ?? [];
+            if (isset($args[0]['inner'], $args[4]) && is_string($args[4]) && strpos($args[4], '0x') === 0) {
+                $coinType = $args[0]['inner'];
+                if (isset($COIN_TYPES[$coinType])) {
+                    $currency = $COIN_TYPES[$coinType];
+                }
+                $recipientAddress = $args[4];
+                logMessage("Found recipient from script_payload: $recipientAddress ($currency)");
+            }
+        }
+
+        // Method 2c: FA mint entry (e.g. testnet_assets::mint) — args[0].inner = metadata, args[1] = recipient; not primary_fungible_store::transfer
+        if (!$recipientAddress && ($payload['type'] ?? '') === 'entry_function_payload') {
+            $args = $payload['arguments'] ?? [];
+            if (isset($args[0]['inner'], $args[1]) && is_string($args[1]) && strpos($args[1], '0x') === 0) {
+                $coinType = $args[0]['inner'];
+                if (isset($COIN_TYPES[$coinType])) {
+                    $currency = $COIN_TYPES[$coinType];
+                    $recipientAddress = $args[1];
+                    logMessage("Found recipient from FA mint-like entry args: $recipientAddress ($currency)");
                 }
             }
         }
@@ -210,8 +273,24 @@ function processDepositEvent($depositEvent, $message, $network, $protocol) {
         'transaction_hash' => $txHash,
         'transaction_version' => $version,
         'timestamp' => $timestamp,
-        'explorer_url' => "https://explorer.aptoslabs.com/txn/{$txHash}?network={$network}"
+        'explorer_url' => "https://explorer.aptoslabs.com/txn/{$txHash}?network=" . strtolower((string) $network)
     ]);
+}
+
+// --- Aptos address forms: DB often stores short `0x`+hex; Nodit may use left-padded 64 nibbles ---
+function aptosAddressLookupCandidates($address) {
+    $hex = strtolower(preg_replace('/^0x/i', '', trim((string) $address)));
+    if ($hex === '' || !ctype_xdigit($hex)) {
+        return array_values(array_unique([$address]));
+    }
+    $padded = str_pad($hex, 64, '0', STR_PAD_LEFT);
+    $short  = '0x' . (ltrim($padded, '0') ?: '0');
+    return array_values(array_unique([
+        strtolower(trim((string) $address)),
+        '0x' . $hex,
+        $short,
+        '0x' . $padded,
+    ]));
 }
 
 // --- Get User by Aptos Address ---
@@ -222,19 +301,27 @@ function getUserByAddress($address) {
         $pdo = new PDO("mysql:host=$DB_HOST;dbname=$DB_NAME", $DB_USER, $DB_PASS);
         $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 
-        // Try exact match first
-        $stmt = $pdo->prepare("SELECT * FROM users WHERE aptos_address = :address LIMIT 1");
-        $stmt->execute(['address' => $address]);
-        $user = $stmt->fetch(PDO::FETCH_ASSOC);
+        $candidates = array_unique(array_merge(
+            aptosAddressLookupCandidates($address),
+            aptosAddressLookupCandidates(normalizeAddress($address))
+        ));
 
-        // If no exact match, try case-insensitive
-        if (!$user) {
-            $stmt = $pdo->prepare("SELECT * FROM users WHERE LOWER(aptos_address) = LOWER(:address) LIMIT 1");
-            $stmt->execute(['address' => $address]);
+        foreach ($candidates as $candidate) {
+            $stmt = $pdo->prepare("SELECT * FROM users WHERE aptos_address = :address LIMIT 1");
+            $stmt->execute(['address' => $candidate]);
             $user = $stmt->fetch(PDO::FETCH_ASSOC);
+            if ($user) {
+                return $user;
+            }
+            $stmt = $pdo->prepare("SELECT * FROM users WHERE LOWER(aptos_address) = LOWER(:address) LIMIT 1");
+            $stmt->execute(['address' => $candidate]);
+            $user = $stmt->fetch(PDO::FETCH_ASSOC);
+            if ($user) {
+                return $user;
+            }
         }
 
-        return $user;
+        return null;
     } catch (PDOException $e) {
         logMessage("Database error: " . $e->getMessage());
         return null;
@@ -269,10 +356,9 @@ function sendDepositNotification($data) {
     $ch = curl_init($WHATSAPP_WEBHOOK_URL);
     curl_setopt($ch, CURLOPT_POST, true);
     curl_setopt($ch, CURLOPT_POSTFIELDS, $jsonPayload);
-    curl_setopt($ch, CURLOPT_HTTPHEADER, [
-        'Content-Type: application/json',
-        'Content-Length: ' . strlen($jsonPayload)
-    ]);
+    $headers = WebhookAuthService::internalAuthCurlHeaders();
+    $headers[] = 'Content-Length: ' . strlen($jsonPayload);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_TIMEOUT, 10);
 

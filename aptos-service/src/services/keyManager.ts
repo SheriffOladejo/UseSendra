@@ -2,14 +2,19 @@
 import crypto from 'crypto';
 import 'dotenv/config';
 
-if (!process.env.ENCRYPTION_KEY) {
-  throw new Error('ENCRYPTION_KEY is not set in .env');
+const ACTIVE_KEY_HEX =
+  process.env.NEW_ENCRYPTION_KEY?.trim() || process.env.ENCRYPTION_KEY?.trim();
+
+if (!ACTIVE_KEY_HEX) {
+  throw new Error('ENCRYPTION_KEY or NEW_ENCRYPTION_KEY must be set in .env');
 }
 
-const ENCRYPTION_KEY = Buffer.from(process.env.ENCRYPTION_KEY, 'hex');
+const ENCRYPTION_KEY = Buffer.from(ACTIVE_KEY_HEX, 'hex');
 
 if (ENCRYPTION_KEY.length !== 32) {
-  throw new Error('ENCRYPTION_KEY must be exactly 32 bytes (64 hex characters)');
+  throw new Error(
+    'Active encryption key must be exactly 32 bytes (64 hex characters)',
+  );
 }
 
 const ALGORITHM = 'aes-256-gcm';

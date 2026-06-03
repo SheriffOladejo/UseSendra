@@ -27,12 +27,19 @@ class DropoffNotesStep extends BaseStep
             'dropoff_notes' => $note
         ]);
 
-        // Move to next step (e.g., package details or confirmation)
-        $this->nextStep($phone, 'item_name');
+        if ($this->isEditMode() && $this->getEditTarget() === 'edit_instructions') {
+            $this->finishEditAndShowSummary($phone, (int) $requestId);
+            return '';
+        }
+
+        // Move to package context (short flow: one prompt before photo)
+        $this->nextStep($phone, 'item_description');
 
         $this->whatsappService->sendMessage(
             $phone,
-            "Got it! Now let's continue with your package details.\n\nWhat are you sending? Please provide the item name\nExample: 'Documents'."
+            "What are you sending? 📦\n"
+            . "(e.g. T-shirt, documents, small box)\n\n"
+            . "Reply with a short description of the item."
         );
 
         return '';

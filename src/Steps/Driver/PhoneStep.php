@@ -4,6 +4,7 @@ namespace App\Steps\Driver;
 
 use App\Steps\BaseStep;
 use App\Utils\Translator;
+use App\Utils\VehicleTypeHelper;
 
 class PhoneStep extends BaseStep
 {
@@ -24,10 +25,7 @@ class PhoneStep extends BaseStep
         $this->whatsappService->sendButtonMessage(
             $phone,
             $t->get('vehicle_prompt'),
-            [
-                "motorcycle" => $t->get('vehicle_motorcycle'),
-                "keke"       => $t->get('vehicle_keke')
-            ]
+            VehicleTypeHelper::driverButtonLabels($t)
         );
 
         return $t->get('');

@@ -1,13 +1,13 @@
 <?php
-$_ENV['INTERNAL_API_SECRET'] = 'string';
+
 error_reporting(E_ALL);
 ini_set('display_errors', 0); // FIXED: was 1 — PHP errors in response body break WhatsApp's 200 check
 ini_set('log_errors', 1);
-ini_set('error_log', '/var/www/html/php-debug.log');
+//ini_set('error_log', '/var/www/html/php-debug.log');
 
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type, Authorization');
+header('Access-Control-Allow-Headers: Content-Type, Authorization, X-Internal-Secret');
 header('Access-Control-Max-Age: 86400');
 
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
@@ -16,22 +16,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 }
 
 require __DIR__ . '/vendor/autoload.php';
+require __DIR__ . '/config/bootstrap_env.php';
 require __DIR__ . '/config/Database.php';
 $botConfigs = require __DIR__ . '/config/Bots.php';
 
 use App\Controllers\AuthController;
 use App\Controllers\LogisticsAuthController;
 use App\Controllers\MessageController;
+use App\Services\WebhookAuthService;
+use App\Services\WhatsAppInboundFilter;
 use App\Services\WhatsAppService;
 
-$VERIFY_TOKEN    = "214047d9376eba3bc1efc4ff0dc8ffc75c11e88768c999dc9d11e53bc3df5052";
-$ACCESS_TOKEN    = "EAAnBMaDNtoUBQeFAjBMFryee3LifVRqjB4NkecAPZAnXKRKcUZA2u9JcilTaICwqa7qJJWNuQctZCH020Ir1SVzO33UcCkuP8s5H45BpyIrZAQDKnJVDS33qZAt0IlOptKZB7aO5ZBytSzYgTTMLFI0e4yrtpp0MyGqkMKbSw4bvMPUA5l91ZCUEZBb4saoChLQZDZD";
+$VERIFY_TOKEN = $_ENV['WHATSAPP_VERIFY_TOKEN'] ?? getenv('WHATSAPP_VERIFY_TOKEN') ?: '';
+$ACCESS_TOKEN = $_ENV['WHATSAPP_ACCESS_TOKEN'] ?? getenv('WHATSAPP_ACCESS_TOKEN') ?: '';
 
-$SENDRA_APTOS_PHONE_ID = "851265871413834";
-$SENDRA_LOGISTICS_PHONE_ID = "1097784993409171";
+$SENDRA_APTOS_PHONE_ID = $_ENV['WHATSAPP_APTOS_PHONE_NUMBER_ID'] ?? getenv('WHATSAPP_APTOS_PHONE_NUMBER_ID') ?: '851265871413834';
+$SENDRA_LOGISTICS_PHONE_ID = $_ENV['WHATSAPP_LOGISTICS_PHONE_NUMBER_ID'] ?? getenv('WHATSAPP_LOGISTICS_PHONE_NUMBER_ID') ?: '1097784993409171';
 
-$input = json_decode(file_get_contents('php://input'), true);
-$incomingPhoneNumberId = $input['entry'][0]['changes'][0]['value']['metadata']['phone_number_id'] ?? $SENDRA_APTOS_PHONE_ID;
+// Read POST body once: php://input is not reliably re-readable; deposit JSON has no `entry` tree.
+$postRawBody = '';
+$postJson    = [];
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $postRawBody = file_get_contents('php://input') ?: '';
+    $postJson    = json_decode($postRawBody, true) ?: [];
+}
+$incomingPhoneNumberId = $SENDRA_APTOS_PHONE_ID;
+if (!empty($postJson['entry'][0]['changes'][0]['value']['metadata']['phone_number_id'])) {
+    $incomingPhoneNumberId = $postJson['entry'][0]['changes'][0]['value']['metadata']['phone_number_id'];
+}
 
 $bot = $botConfigs[$incomingPhoneNumberId] ?? null;
 
@@ -87,13 +99,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
 
 // ── POST: All incoming requests ───────────────────────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $body       = file_get_contents("php://input");
+    $body       = $postRawBody;
     $requestUri = $_SERVER['REQUEST_URI'];
+    $action     = (string) ($_GET['action'] ?? '');
 
-    error_log("=== WEBHOOK HIT: $requestUri === $body");
+    error_log('=== WEBHOOK HIT: ' . $requestUri . ' action=' . $action . ' ===');
+
+    $isInternalRoute = WebhookAuthService::isInternalPostRoute($requestUri, $action);
+    if ($isInternalRoute) {
+        WebhookAuthService::requireInternalAuthOrExit();
+    } else {
+        WebhookAuthService::requireMetaSignatureOrExit($body);
+    }
 
     // ── /signup ───────────────────────────────────────────────────────────────
-    if (strpos($requestUri, '/signup') !== false || ($_GET['action'] ?? '') === 'signup') {
+    if (strpos($requestUri, '/signup') !== false || $action === 'signup') {
         $data = json_decode($body, true);
 
         if (!isset($data['phoneNumber'], $data['username'], $data['aptos_address'])) {
@@ -114,7 +134,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     // ── /sendSuccess ──────────────────────────────────────────────────────────
-    if (strpos($requestUri, '/sendSuccess') !== false || ($_GET['action'] ?? '') === 'sendSuccess') {
+    if (strpos($requestUri, '/sendSuccess') !== false || $action === 'sendSuccess') {
         $data = json_decode($body, true);
 
         if (!isset($data['amount'], $data['currency'], $data['recipient'], $data['sender'], $data['senderPhoneNumber'])) {
@@ -133,7 +153,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // ── /voucher/claim ────────────────────────────────────────────────────────
     // Called by the web app after recipient confirms their phone number
     // No aptos_address needed — backend generates a fresh Sendra keypair
-    if (strpos($requestUri, '/voucher/claim') !== false || ($_GET['action'] ?? '') === 'voucherClaim') {
+    if (strpos($requestUri, '/voucher/claim') !== false || $action === 'voucherClaim') {
         $data = json_decode($body, true);
 
         if (!isset($data['token'], $data['phone_number'])) {
@@ -152,7 +172,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // ── /deposit ──────────────────────────────────────────────────────────────
     // Matches both /deposit path and ?action=deposit query string (used by nodit.php)
     $isDepositRequest = strpos($requestUri, '/deposit') !== false
-        || ($_GET['action'] ?? '') === 'deposit';
+        || $action === 'deposit';
 
     if ($isDepositRequest) {
         error_log("=== DEPOSIT NOTIFICATION RECEIVED ===");
@@ -200,12 +220,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         sendJsonResponse($result, $result['success'] ? 200 : 400);
     }
 
-    // ── WhatsApp message webhook ──────────────────────────────────────────────
-    $data = json_decode($body, true);
+    // ── WhatsApp message webhook (Meta signature verified above) ────────────────
+    $data = $postJson;
 
     if (!isset($data['entry'])) {
-        http_response_code(200);
-        echo "EVENT_RECEIVED";
+        error_log('WEBHOOK: POST without entry after Meta signature check');
+        http_response_code(400);
+        echo 'Bad Request';
         exit;
     }
 
@@ -219,6 +240,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 continue;
             }
 
+            // Meta echo webhooks (our outbound messages) — never treat as user commands
+            if (isset($value['message_echoes']) && is_array($value['message_echoes'])) {
+                continue;
+            }
+
             if (!isset($value['messages'])) {
                 continue;
             }
@@ -229,19 +255,40 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 // Determine message payload
                 if (isset($msg['text']['body'])) {
-                    $messagePayload = trim(strtolower($msg['text']['body']));
+                    $rawBody = trim((string) $msg['text']['body']);
+                    $messagePayload = strtolower($rawBody);
+                    if (WhatsAppInboundFilter::isOutboundEchoMessage($msg, $messagePayload)) {
+                        error_log('WEBHOOK: ignored outbound echo from=' . $from . ' body=' . substr($rawBody, 0, 80));
+                        continue;
+                    }
                 } elseif (isset($msg['interactive']['button_reply']['id'])) {
                     $messagePayload = trim(strtolower($msg['interactive']['button_reply']['id']));
                 } elseif (isset($msg['interactive']['list_reply']['id'])) {
                     $messagePayload = trim(strtolower($msg['interactive']['list_reply']['id']));
                 } elseif ($msg['type'] === 'location') {
-                    $lat = $msg['location']['latitude'] ?? null;
-                    $lng = $msg['location']['longitude'] ?? null;
-                    $messagePayload = "$lat,$lng";
-                    error_log("Received location message: $messagePayload");
+                    $loc = $msg['location'] ?? [];
+                    $lat = $loc['latitude'] ?? null;
+                    $lng = $loc['longitude'] ?? null;
+                    $name = $loc['name'] ?? null;
+                    $address = $loc['address'] ?? null;
+
+                    // Preserve rich fields for later steps (drivers need a readable address).
+                    // Steps should still accept legacy "lat,lng" strings for compatibility.
+                    $messagePayload = json_encode([
+                        'location' => [
+                            'latitude'  => $lat,
+                            'longitude' => $lng,
+                            'name'      => $name,
+                            'address'   => $address,
+                        ],
+                    ]);
+                    error_log("Received location message: " . $messagePayload);
                 } elseif ($msg['type'] === 'image') {
-                    // FIXED: Extract image data from the current $msg, not hardcoded array indices
-                    $messagePayload = json_encode(['image' => $msg['image']]);
+                    $imagePayload = ['image' => $msg['image']];
+                    if (!empty($msg['image']['caption']) && is_string($msg['image']['caption'])) {
+                        $imagePayload['caption'] = $msg['image']['caption'];
+                    }
+                    $messagePayload = json_encode($imagePayload);
                     error_log("Received image message: " . json_encode($msg['image']));
                 } else {
                     $messagePayload = '';
@@ -293,6 +340,11 @@ function handleDepositNotification($data, $whatsappService) {
         ? substr($txHash, 0, 10) . '...' . substr($txHash, -8)
         : $txHash;
 
+    $suppressWa = $db && WhatsAppInboundFilter::shouldSuppressDepositWhatsAppNotify($db, $phoneNumber, $data);
+    if ($suppressWa) {
+        error_log("DEPOSIT NOTIFY: suppressed WhatsApp during off-ramp phone={$phoneNumber} amount={$amount} {$currency}");
+    }
+
     $message = "*💰 Crypto Deposit Notification*\n\n" .
                "*Summary:*\nReceived *{$amount} {$currency}* on *{$network}*\n" .
                "From: `{$shortSender}`\n\n" .
@@ -300,7 +352,9 @@ function handleDepositNotification($data, $whatsappService) {
                ($explorerUrl ? "*View In Explorer:*\n{$explorerUrl}\n\n" : '') .
                "✅ Your wallet has been credited successfully!";
 
-    $result = $whatsappService->sendMessage($phoneNumber, $message);
+    $result = $suppressWa
+        ? ['success' => true, 'suppressed' => true]
+        : $whatsappService->sendMessage($phoneNumber, $message);
 
     // ── Record deposit in transaction history ─────────────────────────────────
     if ($result['success'] && $db && $txHash !== 'unknown') {

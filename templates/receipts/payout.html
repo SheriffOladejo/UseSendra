@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=432, initial-scale=1" />
+  <title>Sendra withdrawal receipt</title>
+  <style>
+    @font-face {
+      font-family: 'Inter';
+      src: url('{{font_regular_uri}}') format('truetype');
+      font-weight: 400;
+      font-style: normal;
+    }
+    @font-face {
+      font-family: 'Inter';
+      src: url('{{font_bold_uri}}') format('truetype');
+      font-weight: 700;
+      font-style: normal;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      width: 432px;
+      min-height: 844px;
+      background: #fff;
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      color: #0f3e2e;
+      -webkit-font-smoothing: antialiased;
+    }
+    .wrap { padding: 20px 20px 52px; }
+    .logo-row {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 16px;
+    }
+    .logo-img {
+      height: 36px;
+      width: auto;
+      max-width: 100%;
+      display: block;
+      object-fit: contain;
+    }
+    h1 {
+      text-align: center;
+      font-size: 20px;
+      font-weight: 700;
+      color: #0f3e2e;
+      margin-bottom: 18px;
+    }
+    .hero {
+      background: #0f3e2e;
+      border-radius: 14px;
+      padding: 32px 20px 28px;
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+      margin-bottom: 40px;
+      isolation: isolate;
+      -webkit-backface-visibility: hidden;
+      backface-visibility: hidden;
+      transform: translateZ(0);
+    }
+    .section-after-hero {
+      margin-top: 4px;
+    }
+    .hero-pattern {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      opacity: 0.14;
+      background-image:
+        radial-gradient(circle at 15% 25%, #fff 1.5px, transparent 1.5px),
+        radial-gradient(circle at 85% 75%, #fff 1.5px, transparent 1.5px);
+      background-size: 24px 24px;
+      border-radius: inherit;
+    }
+    .hero-label {
+      position: relative;
+      z-index: 1;
+      font-size: 12px;
+      color: #b8d4cb;
+      margin-bottom: 10px;
+    }
+    .hero-amount {
+      position: relative;
+      z-index: 1;
+      font-size: 40px;
+      font-weight: 700;
+      color: #fff;
+      line-height: 1.1;
+      letter-spacing: -0.02em;
+    }
+    .section {
+      margin-bottom: 8px;
+    }
+    .section-title {
+      font-size: 14px;
+      font-weight: 700;
+      color: #121923;
+      margin-bottom: 16px;
+    }
+    .row {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 16px;
+      margin-bottom: 14px;
+      font-size: 13px;
+      line-height: 1.45;
+      min-height: 22px;
+    }
+    .row:last-child {
+      margin-bottom: 0;
+    }
+    .row .k {
+      color: #6e7686;
+      flex: 0 0 140px;
+      padding-top: 1px;
+    }
+    .row .v {
+      font-weight: 700;
+      color: #0f3e2e;
+      text-align: right;
+      flex: 1;
+      word-break: break-word;
+    }
+    .row.crypto .v {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+    .usdc {
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: #2775ca;
+      flex-shrink: 0;
+      position: relative;
+    }
+    .usdc::after {
+      content: '';
+      position: absolute;
+      inset: 3px;
+      border-radius: 50%;
+      border: 2px solid #fff;
+    }
+    .dots {
+      border: none;
+      border-top: 2px dotted #c4ccd4;
+      margin: 22px 0 24px;
+    }
+    .footer {
+      text-align: center;
+      margin-top: 40px;
+      font-size: 11px;
+      font-weight: 700;
+      color: #0f3e2e;
+      line-height: 1.55;
+      letter-spacing: 0.03em;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="logo-row">
+      <img class="logo-img" src="{{logo_uri}}" alt="Sendra" />
+    </div>
+    <h1>Withdrawal receipt</h1>
+
+    <div class="hero">
+      <div class="hero-pattern" aria-hidden="true"></div>
+      <div class="hero-label">You withdrew:</div>
+      <div class="hero-amount">{{amount_ngn}}</div>
+    </div>
+
+    <div class="section section-after-hero">
+      <div class="section-title">Transaction summary</div>
+      <div class="row crypto">
+        <span class="k">Amount (USD):</span>
+        <span class="v"><span class="usdc" aria-hidden="true"></span>{{withdraw_amount}}</span>
+      </div>
+      <div class="row">
+        <span class="k">Conversion rate:</span>
+        <span class="v">{{conversion_rate}}</span>
+      </div>
+    </div>
+    <hr class="dots" />
+
+    <div class="section">
+      <div class="section-title">Receiver's details</div>
+      <div class="row"><span class="k">Bank Name</span><span class="v">{{bank_name}}</span></div>
+      <div class="row"><span class="k">Account name:</span><span class="v">{{account_name}}</span></div>
+      <div class="row"><span class="k">Account number:</span><span class="v">{{account_number}}</span></div>
+    </div>
+    <hr class="dots" />
+
+    <div class="section">
+      <div class="row"><span class="k">Sender:</span><span class="v">{{sender_name}}</span></div>
+      <div class="row"><span class="k">Reference:</span><span class="v">{{display_reference}}</span></div>
+      {{bank_remark_row}}
+    </div>
+    <hr class="dots" />
+
+    <div class="section">
+      <div class="row"><span class="k">Date:</span><span class="v">{{completed_at}}</span></div>
+    </div>
+
+    <div class="footer">
+      THANK YOU FOR CHOOSING<br />SENDRA!!
+    </div>
+  </div>
+</body>
+</html>

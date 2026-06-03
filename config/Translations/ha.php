@@ -56,7 +56,7 @@ return [
     'invalid_phone' => "Da fatan shigar da ingantaccen lambar waya.",
 
     // Location Steps
-    'location_not_found' => "📍 Ba za mu iya samun wurin ku ba.\n\nDa fatan za a yi amfani da fasalin rabawa wurin WhatsApp:\n1. Danna '+'\n2. Zaɓi 'Wuri'\n3. Zaɓi 'Aika wurin yanzu' ko zaɓi wuri a taswira\n\nWannan zai taimaka mana aika bukatun kusa da ku!",
+    'location_not_found' => "📍 Ba za mu iya samun wurin ku ba.\n\nDa fatan za a yi amfani da fasalin rabawa wurin WhatsApp:\n1. Danna '➕' (iOS) ko '📎' (Android)\n2. Zaɓi 'Wuri'\n3. Zaɓi 'Aika wurin yanzu' ko zaɓi wuri a taswira\n\nWannan zai taimaka mana aika bukatun kusa da ku!",
     'location_confirm_prompt' => "Shin wannan wurin da kuke so ne📍?",
     'location_confirm_button' => "Idan daidai ne, danna *Tabbatar*. In ba haka ba, aika sabon wuri.",
     'location_invalid' => "📍 Ba mu iya samun wurinka ba. Don Allah tura wurinka ta WhatsApp.",
@@ -86,9 +86,13 @@ return [
     'vehicle_prompt'               => "Madalla! 🚀\nFadi irin abin hawa da kake amfani da shi don isar da kaya.",
     'vehicle_motorcycle'           => "🏍️ Babur",
     'vehicle_keke'                 => "🛺 Keke",
+    'vehicle_bicycle'              => "🚲 Keke",
     'invalid_vehicle_type' => "Yi hakuri, wannan nau'in abin hawa ba daidai bane. Da fatan zaɓi ɗaya:",
     'vehicle_motorcycle'  => "🏍️ Babur",
     'vehicle_keke'        => "🛺 Keke",
+    'vehicle_bicycle'     => "🚲 Keke",
+    'bicycle_onboarding_nin_prompt' => "Mai kyau! 🎯\n\nMasu keke ba sa buƙatar lasisin tuƙi ko lambar faranti.\n\nZa mu tabbatar da NIN — shigar da *NIN mai lamba 11*, ko rubuta *skip*.",
+    'bicycle_vehicle_picture_prompt' => "📷 Aika hoton kekenka (gefe, haske mai kyau).\n\nDanna ➕ sannan Camera ko Gallery.",
     
     // Selfie Step
     'selfie_invalid' => "Da fatan za a aika hoto mai inganci. Tabbatar ka aika shi azaman haɗin hoto.",

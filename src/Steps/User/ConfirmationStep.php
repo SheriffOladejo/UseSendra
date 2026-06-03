@@ -3,10 +3,28 @@
 namespace App\Steps\User;
 
 use App\Steps\BaseStep;
+use App\Utils\DeliverySummaryFormatter;
 
 class ConfirmationStep extends BaseStep
 {
-    protected string $validationError = "";
+    protected string $validationError = 'Please tap Confirm or Edit below to continue.';
+
+    private function resendSummaryWithButtons(string $phoneNumber, ?int $requestId): void
+    {
+        $request = $requestId ? $this->deliveryRequestModel->findById($requestId) : null;
+        $body = is_array($request) && !empty($request)
+            ? DeliverySummaryFormatter::format($request)
+            : 'Please choose an option to proceed with your order:';
+
+        $this->whatsappService->sendButtonMessage(
+            $phoneNumber,
+            $body,
+            [
+                'confirm' => '✅ Confirm',
+                'edit'    => '✏️ Edit',
+            ]
+        );
+    }
 
     public function handle(array $session, string $message): string
     {
@@ -16,20 +34,32 @@ class ConfirmationStep extends BaseStep
 
         $choice = strtolower(trim($message));
         if ($choice === 'edit') {
-            $this->nextStep($phone, 'summary');
-            return "You can edit your delivery details now.";
+            $this->nextStep($phone, 'edit_order');
+            // Immediately show edit options (WhatsApp button max is 3, so use List).
+            $this->whatsappService->sendListMessage(
+                $phone,
+                "What would you like to edit?",
+                "Edit order",
+                [
+                    'edit_pickup_location' => 'Pickup location',
+                    'edit_dropoff_location' => 'Drop-off location',
+                    'edit_instructions' => 'Rider instructions',
+                    'edit_item_desc' => 'Item description',
+                    'edit_item_photo' => 'Item photo',
+                    'edit_sender_phone' => 'Sender phone',
+                    'edit_receiver_phone' => 'Receiver phone',
+                    'edit_vehicle' => 'Vehicle type',
+                    'edit_price' => 'Offer price',
+                    'edit_more' => 'More options…',
+                ]
+            );
+            return '';
         }
 
         if ($choice !== 'confirm') {
-            $this->whatsappService->sendButtonMessage(
-                $phone,
-                'Please choose an option to proceed with your order:',
-                [
-                    'confirm' => "✅ Confirm",
-                    'edit' => "✏️ Edit"
-                ]
-            );
-        };
+            $this->resendSummaryWithButtons($phone, (int) $requestId);
+            return '';
+        }
 
         $this->deliveryRequestModel->update($requestId, [
             'status' => 'searching_driver',
@@ -39,9 +69,9 @@ class ConfirmationStep extends BaseStep
 
         $this->whatsappService->sendButtonMessage(
             $phone,
-            'Delivery confirmed! A secure QR code will be generated for pickup. Next: Find a courier.',
+            "Request confirmed! Next: Find a courier.",
             [
-                'confirm' => "🚀 Find Courier"
+                'confirm' => "🚀 Find a Courier"
             ]
         );
 
@@ -54,5 +84,15 @@ class ConfirmationStep extends BaseStep
     public function validateInput(string $message): bool
     {
         return in_array(strtolower(trim($message)), ['confirm','edit']);
+    }
+
+    public function sendValidationFailureFeedback(string $phoneNumber): void
+    {
+        $err = trim($this->getValidationError());
+        if ($err !== '') {
+            $this->whatsappService->sendMessage($phoneNumber, $err);
+        }
+        $requestId = isset($this->session['delivery_request_id']) ? (int) $this->session['delivery_request_id'] : null;
+        $this->resendSummaryWithButtons($phoneNumber, $requestId);
     }
 }

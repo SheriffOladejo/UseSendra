@@ -56,7 +56,7 @@ return [
     'invalid_phone' => "Biko tinye nọmba ekwentị ziri ezi.",
 
     // Location Steps
-    'location_not_found' => "📍 Enweghị m ike nweta ebe gị.\n\nBiko jiri atụmatụ kesaa ebe WhatsApp:\n1. Pịa akara '+'\n2. Họrọ 'Ebe'\n3. Họrọ 'Zipu ebe ugbu a' ma ọ bụ họrọ ebe na map\n\nNke a ga-enyere anyị izipu arịrịọ dị nso gị!",
+    'location_not_found' => "📍 Enweghị m ike nweta ebe gị.\n\nBiko jiri atụmatụ kesaa ebe WhatsApp:\n1. Pịa akara '➕' (iOS) ma ọ bụ '📎' (Android)\n2. Họrọ 'Ebe'\n3. Họrọ 'Zipu ebe ugbu a' ma ọ bụ họrọ ebe na map\n\nNke a ga-enyere anyị izipu arịrịọ dị nso gị!",
     'location_confirm_prompt' => "Ọ bụ ebe a ị chọrọ ka ọ bụrụ📍?",
     'location_confirm_button' => "Ọ bụrụ na ọ dị mma, pịa *Kwenye*. Ma ọ bụghị ya, zipu ebe ọhụrụ.",
     'location_invalid' => "📍 Anyị enweghị ike ịhụ ebe gị. Biko zitere ọnọdụ gị site na WhatsApp.",
@@ -82,6 +82,7 @@ return [
     'vehicle_prompt'               => "Ọma! 🚀\nKọwaa ụgbọala ị na-eji maka nnyefe.",
     'vehicle_motorcycle'           => "🏍️ Ụgbọala igwe",
     'vehicle_keke'                 => "🛺 Keke",
+    'vehicle_bicycle'              => "🚲 Ịnyịnya igwe",
 
     // Vehicle Type Step
     'vehicle_type_prompt' => "Ọ dị mma! 🎯\n\nIji mee ka ihe dị nchebe, anyị ga-achọ ịlele ozi gị, nke a ga-ewe ihe dị ka nkeji 2. Tinye NIN gị mbụ.",
@@ -89,6 +90,9 @@ return [
     'invalid_vehicle_type' => "Ndo, ụdị ụgbọala a họrọ adịghị mma. Biko họrọ otu:",
     'vehicle_motorcycle'  => "🏍️ Ụgbọala igwe",
     'vehicle_keke'        => "🛺 Keke",
+    'vehicle_bicycle'     => "🚲 Ịnyịnya igwe",
+    'bicycle_onboarding_nin_prompt' => "Ọ dị mma! 🎯\n\nNdị na-ebu ịnyịnya igwe anaghị achọ ikike ọkwọ ụgbọala ma ọ bụ nọmba pleti.\n\nAnyị ga-nyochaa NIN gị — tinye *NIN nọmba 11*, ma ọ bụ dee *skip*.",
+    'bicycle_vehicle_picture_prompt' => "📷 Zipu foto ịnyịnya igwe gị (n'akụkụ, ìhè zuru oke).\n\nPịa ➕ wee họrọ Camera ma ọ bụ Gallery.",
     
     // Selfie Step
     'selfie_invalid' => "Biko zipu foto ziri ezi. Jide n'aka na ị zipu ya dịka mgbakwunye foto.",

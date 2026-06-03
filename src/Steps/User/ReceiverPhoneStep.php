@@ -21,15 +21,18 @@ class ReceiverPhoneStep extends BaseStep
             'receiver_phone' => $receiverPhone
         ]);
 
+        if ($this->isEditMode() && in_array($this->getEditTarget(), ['edit_receiver_phone'], true)) {
+            $this->finishEditAndShowSummary($phone, (int) $requestId);
+            return '';
+        }
+
         $this->nextStep($phone, 'sender_vehicle_type');
 
-        $this->whatsappService->sendButtonMessage(
+        $this->whatsappService->sendListMessage(
             $phone,
             "Select the delivery vehicle type:",
-            [
-                'motorcycle' => "🏍️ Motorcycle",
-                'keke' => "🛺 Keke"
-            ]
+            'Choose vehicle',
+            \App\Utils\VehicleTypeHelper::customerListRows()
         );
 
         return '';

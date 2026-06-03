@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 // src/index.ts
 require("dotenv/config");
 const express_1 = __importDefault(require("express"));
+const aptosAssets_js_1 = require("./config/aptosAssets.js");
 const accounts_js_1 = require("./routes/accounts.js");
 const transactions_js_1 = require("./routes/transactions.js");
 const app = (0, express_1.default)();
@@ -38,6 +39,7 @@ const PORT = parseInt(process.env.PORT || '3001', 10);
 const HOST = process.env.NODE_ENV === 'production' ? '127.0.0.1' : '0.0.0.0';
 app.listen(PORT, HOST, () => {
     console.log(`\n🚀 Aptos service running on http://${HOST}:${PORT}`);
-    console.log(`📡 Network: ${process.env.APTOS_NETWORK || 'TESTNET'}`);
+    console.log(`📡 Aptos SDK network: ${process.env.APTOS_NETWORK || 'TESTNET'}`);
+    console.log(`📡 SmoothSend network: ${(0, aptosAssets_js_1.smoothSendNetwork)()}`);
     console.log(`🔒 Auth:    X-Internal-Secret header required on all routes\n`);
 });

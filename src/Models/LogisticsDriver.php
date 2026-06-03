@@ -47,10 +47,51 @@ class LogisticsDriver
     }
 
     /**
+     * Which verification_status values receive outbound job broadcasts from findNearby().
+     * Production: approved only.
+     * Test: set env LOGISTICS_TEST_COURIERS_ONLY=true → only approved_test (you + friend), no live riders pinged.
+     */
+    public static function jobBroadcastVerificationStatuses(): array
+    {
+        $raw = $_ENV['LOGISTICS_TEST_COURIERS_ONLY'] ?? getenv('LOGISTICS_TEST_COURIERS_ONLY') ?: 'false';
+
+        return filter_var($raw, FILTER_VALIDATE_BOOLEAN)
+            ? ['approved_test']
+            : ['approved'];
+    }
+
+    /**
      * Find driver by Distance
      */
-    public function findNearby($lat, $lng, $radius = 5)
+    /**
+     * @param string|null $vehicleType delivery_requests.vehicle_type — only riders with matching type are returned
+     */
+    public function findNearby($lat, $lng, $radius = 5, ?string $vehicleType = null)
     {
+        $statuses = self::jobBroadcastVerificationStatuses();
+        $placeholders = [];
+        $params = [
+            'lat' => $lat,
+            'lng' => $lng,
+            'radius' => $radius,
+        ];
+        foreach ($statuses as $i => $status) {
+            $key = 'vs' . $i;
+            $placeholders[] = ':' . $key;
+            $params[$key] = $status;
+        }
+        $inSql = implode(',', $placeholders);
+
+        $vehicleSql = '';
+        if ($vehicleType !== null && $vehicleType !== '') {
+            if ($vehicleType === 'motorcycle') {
+                $vehicleSql = " AND vehicle_type IN ('motorcycle', 'bike') ";
+            } else {
+                $vehicleSql = ' AND vehicle_type = :courier_vehicle_type ';
+                $params['courier_vehicle_type'] = $vehicleType;
+            }
+        }
+
         $sql = "
     SELECT *,
     (
@@ -63,9 +104,10 @@ class LogisticsDriver
         )
     ) AS distance
     FROM drivers
-    WHERE verification_status IN ('approved') AND status IN ('active')
+    WHERE verification_status IN ({$inSql}) AND status IN ('active')
     AND preferred_latitude IS NOT NULL
     AND preferred_longitude IS NOT NULL
+    {$vehicleSql}
     HAVING distance < :radius
     ORDER BY distance
     LIMIT 10
@@ -73,11 +115,7 @@ class LogisticsDriver
 
         $stmt = $this->db->prepare($sql);
 
-        $stmt->execute([
-            'lat' => $lat,
-            'lng' => $lng,
-            'radius' => $radius
-        ]);
+        $stmt->execute($params);
 
         return $stmt->fetchAll(\PDO::FETCH_ASSOC);
     }

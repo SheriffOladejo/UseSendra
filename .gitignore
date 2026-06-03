@@ -5,14 +5,43 @@
 .env
 .env.*
 !.env.example
+aptos-service/.env
 
-# Local database dumps (large, often sensitive)
+# Local database dumps and rotation artifacts (sensitive)
+backups/
 *_backup.sql
 *.sql.gz
+wallet_rotation_audit_*.json
+
+# Node / frontend build
+node_modules/
+**/node_modules/
+admin/dist/
+hyperliquid-smart-money-trader/dashboard/dist/
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+hyperliquid-smart-money-trader/bot/results.json
+
+# Runtime caches and local bot state
+var/centiiv_banks_cache.json
+var/sendra_offramp_learned.json
+var/receipts/*
+!var/receipts/.gitkeep
+hyperliquid-smart-money-trader/smart_money.json
 
 # Logs
 *.log
 logs/
+aptos-indexer-webhook.log
+
+# Runtime health cache (from cron_ramp_health.php)
+var/ramp_health.json
 
 # OS
 .DS_Store

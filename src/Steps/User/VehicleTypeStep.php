@@ -2,7 +2,9 @@
 
 namespace App\Steps\User;
 
+use App\Services\DeliveryPricingService;
 use App\Steps\BaseStep;
+use App\Utils\VehicleTypeHelper;
 
 class VehicleTypeStep extends BaseStep
 {
@@ -12,47 +14,61 @@ class VehicleTypeStep extends BaseStep
     {
         $phone = $session['phone_number'];
         $requestId = $session['delivery_request_id'] ?? null;
-        if (!$requestId) return "Delivery request not found.";
+        if (!$requestId) {
+            return 'Delivery request not found.';
+        }
 
-        $choice = strtolower(trim($message));
-        $mapping = ['motorcycle' => 'motorcycle', 'keke' => 'keke', '🏍️' => 'motorcycle', '🛺' => 'keke'];
-
-        if (!isset($mapping[$choice])) {
-            $this->whatsappService->sendButtonMessage(
-                $phone,
-                "Select the delivery vehicle type:",
-                [
-                    'motorcycle' => "🏍️ Motorcycle",
-                    'keke' => "🛺 Keke"
-                ]
-            );
+        $normalized = VehicleTypeHelper::normalize($message);
+        if ($normalized === null) {
+            $this->sendCustomerVehiclePicker($phone);
 
             return '';
-        };
+        }
 
         $this->deliveryRequestModel->update($requestId, [
-            'vehicle_type' => $mapping[$choice]
+            'vehicle_type' => $normalized,
         ]);
 
         $this->nextStep($phone, 'price_offer');
 
-        // Here, Sendra calculates/estimates a delivery price
-        //$estimatedPrice = $this->deliveryRequestModel->calculateEstimatedPrice($requestId);
-        $estimatedPrice = 3000; // Placeholder for demonstration
+        $row            = $this->deliveryRequestModel->findById($requestId) ?: [];
+        $pricing        = DeliveryPricingService::fromEnv();
+        $estimatedPrice = $pricing->estimateForDeliveryRequest($row, $this->driverModel);
+        $this->deliveryRequestModel->update($requestId, ['offered_price' => $estimatedPrice]);
+
         $this->whatsappService->sendButtonMessage(
             $phone,
-            "Great! The estimated delivery price is ₦{$estimatedPrice}.
-            \n\nClick yes to proceed or simply type your preferred price. e.g. 2500",
+            "Great! The estimated delivery price is ₦{$estimatedPrice}.\n\n"
+            . "Click yes to proceed or simply type your preferred price. e.g. 2500",
             [
-                $estimatedPrice => "Yes, proceed"
+                'yes' => 'Yes, proceed',
             ]
         );
+
         return '';
     }
 
     public function validateInput(string $message): bool
     {
+        return VehicleTypeHelper::normalize($message) !== null;
+    }
 
-        return true;
+    public function sendValidationFailureFeedback(string $phoneNumber): void
+    {
+        $err = trim($this->getValidationError());
+        if ($err !== '') {
+            $this->whatsappService->sendMessage($phoneNumber, $err);
+        }
+        $this->sendCustomerVehiclePicker($phoneNumber);
+    }
+
+    private function sendCustomerVehiclePicker(string $phone): void
+    {
+        $this->whatsappService->sendListMessage(
+            $phone,
+            "Select the delivery vehicle type:",
+            'Choose vehicle',
+            VehicleTypeHelper::customerListRows()
+        );
     }
 }

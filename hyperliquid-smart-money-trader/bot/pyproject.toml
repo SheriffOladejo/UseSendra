@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "smart-money-bot"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+  "hyperliquid-python-sdk>=0.20",
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.32",
+  "pydantic-settings>=2.6",
+  "httpx>=0.27",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[project.scripts]
+smart-money-backtest = "smart_money_bot.backtest:main"

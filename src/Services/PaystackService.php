@@ -49,7 +49,7 @@ class PaystackService
     {
         $payload = [
             "email" => $email,
-            "amount" => $amount * 100, // Paystack uses kobo
+            "amount" => (int) round((float) $amount * 100), // kobo
             "reference" => $reference,
             "callback_url" => $callbackUrl,
             "metadata" => $metadata

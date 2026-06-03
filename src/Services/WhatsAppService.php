@@ -118,6 +118,65 @@ class WhatsAppService
     }
 
     /**
+     * Download incoming media (e.g. image) from WhatsApp Cloud API to a temp file.
+     *
+     * @return string|null Absolute path to temp file, or null on failure
+     */
+    public function downloadMediaToFile(string $mediaId): ?string
+    {
+        $metaUrl = "https://graph.facebook.com/v20.0/{$mediaId}";
+
+        $ch = curl_init($metaUrl);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_HTTPHEADER => [
+                'Authorization: Bearer ' . $this->accessToken,
+            ],
+        ]);
+        $body = curl_exec($ch);
+        $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($code < 200 || $code >= 300) {
+            error_log("WhatsApp media meta failed HTTP {$code}: {$body}");
+            return null;
+        }
+
+        $data = json_decode($body, true);
+        $url = $data['url'] ?? null;
+        if (!$url) {
+            return null;
+        }
+
+        $ch2 = curl_init($url);
+        curl_setopt_array($ch2, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_HTTPHEADER => [
+                'Authorization: Bearer ' . $this->accessToken,
+            ],
+        ]);
+        $binary = curl_exec($ch2);
+        $code2 = curl_getinfo($ch2, CURLINFO_HTTP_CODE);
+        curl_close($ch2);
+
+        if ($code2 < 200 || $code2 >= 300 || !is_string($binary) || $binary === '') {
+            error_log("WhatsApp media binary download failed HTTP {$code2}");
+            return null;
+        }
+
+        $mime = $data['mime_type'] ?? 'image/jpeg';
+        $ext = str_contains((string) $mime, 'png') ? '.png' : '.jpg';
+        $path = sys_get_temp_dir() . '/wa_media_' . bin2hex(random_bytes(8)) . $ext;
+
+        if (file_put_contents($path, $binary) === false) {
+            return null;
+        }
+
+        return $path;
+    }
+
+    /**
      * Send welcome message to new user
      */
     public function sendWelcomeMessage($to, $userName)

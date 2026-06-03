@@ -3,21 +3,21 @@
 // Crontab: */5 * * * * php /var/www/html/coinectra/monitor.php >> /var/log/sendra-monitor.log 2>&1
 
 require __DIR__ . '/vendor/autoload.php';
+require __DIR__ . '/config/bootstrap_env.php';
 require __DIR__ . '/config/Database.php';
 
 use App\Services\WhatsAppService;
 
-// ── Config ────────────────────────────────────────────────────────────────────
-$_ENV['INTERNAL_API_SECRET'] = 'string';
-$ACCESS_TOKEN    = "EAAnBMaDNtoUBQeFAjBMFryee3LifVRqjB4NkecAPZAnXKRKcUZA2u9JcilTaICwqa7qJJWNuQctZCH020Ir1SVzO33UcCkuP8s5H45BpyIrZAQDKnJVDS33qZAt0IlOptKZB7aO5ZBytSzYgTTMLFI0e4yrtpp0MyGqkMKbSw4bvMPUA5l91ZCUEZBb4saoChLQZDZD";
+$ACCESS_TOKEN = $_ENV['WHATSAPP_ACCESS_TOKEN'] ?? getenv('WHATSAPP_ACCESS_TOKEN') ?: '';
 
-$SENDRA_APTOS_PHONE_ID = "851265871413834";
-$SENDRA_LOGISTICS_PHONE_ID = "1097784993409171";
+$SENDRA_APTOS_PHONE_ID = $_ENV['WHATSAPP_APTOS_PHONE_NUMBER_ID'] ?? getenv('WHATSAPP_APTOS_PHONE_NUMBER_ID') ?: '851265871413834';
+$SENDRA_LOGISTICS_PHONE_ID = $_ENV['WHATSAPP_LOGISTICS_PHONE_NUMBER_ID'] ?? getenv('WHATSAPP_LOGISTICS_PHONE_NUMBER_ID') ?: '1097784993409171';
 
 $input = json_decode(file_get_contents('php://input'), true);
 $incomingPhoneNumberId = $input['entry'][0]['changes'][0]['value']['metadata']['phone_number_id'] ?? $SENDRA_APTOS_PHONE_ID;
 
-$db = Database::getInstance()->getConnection();
+$bots = require __DIR__ . '/config/Bots.php';
+$db = Database::getInstance($bots[$SENDRA_APTOS_PHONE_ID]['db_config'], false)->getConnection();
 $whatsappService = new WhatsAppService($ACCESS_TOKEN, $incomingPhoneNumberId);
 
 //$PHONE_NUMBER_ID2 = "942651465596731";

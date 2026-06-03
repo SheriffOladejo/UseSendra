@@ -1,19 +1,25 @@
 <?php
-require __DIR__ . '../../../vendor/autoload.php';
 
+require dirname(__DIR__, 2) . '/vendor/autoload.php';
+require dirname(__DIR__, 2) . '/config/bootstrap_env.php';
+
+use App\Services\WhatsAppMessagingWindow;
 use App\Services\WhatsAppService;
 
-// DB connection
+$host = $_ENV['LOGISTICS_DB_HOST'] ?? getenv('LOGISTICS_DB_HOST') ?: 'localhost';
+$name = $_ENV['LOGISTICS_DB_NAME'] ?? getenv('LOGISTICS_DB_NAME') ?: 'sendra_logistics_db';
+$user = $_ENV['LOGISTICS_DB_USER'] ?? getenv('LOGISTICS_DB_USER') ?: 'developer';
+$pass = $_ENV['LOGISTICS_DB_PASS'] ?? getenv('LOGISTICS_DB_PASS') ?: '';
+$phoneId = $_ENV['WHATSAPP_LOGISTICS_PHONE_NUMBER_ID'] ?? getenv('WHATSAPP_LOGISTICS_PHONE_NUMBER_ID') ?: '1097784993409171';
+$token = $_ENV['WHATSAPP_ACCESS_TOKEN'] ?? getenv('WHATSAPP_ACCESS_TOKEN') ?: '';
+
 $db = new PDO(
-    'mysql:host=localhost;dbname=sendra_logistics_db;charset=utf8mb4',
-    'developer',
-    'Stipendly@2026'
+    "mysql:host={$host};dbname={$name};charset=utf8mb4",
+    $user,
+    $pass
 );
 
-$whatsapp = new WhatsAppService(
-    "EAAnBMaDNtoUBQeFAjBMFryee3LifVRqjB4NkecAPZAnXKRKcUZA2u9JcilTaICwqa7qJJWNuQctZCH020Ir1SVzO33UcCkuP8s5H45BpyIrZAQDKnJVDS33qZAt0IlOptKZB7aO5ZBytSzYgTTMLFI0e4yrtpp0MyGqkMKbSw4bvMPUA5l91ZCUEZBb4saoChLQZDZD",
-    "1097784993409171"
-);
+$whatsapp = new WhatsAppService($token, $phoneId);
 
 echo "Cron started...\n";
 
@@ -25,14 +31,15 @@ echo "Cron started...\n";
 
 // Modified query to include last_message_at for window checking
 $query = $db->query("
-    SELECT 
-        ws.phone_number, 
+    SELECT
+        ws.phone_number,
         ws.current_step,
-        d.last_message_at
+        d.last_message_at,
+        ws.updated_at AS session_updated_at
     FROM whatsapp_sessions ws
     LEFT JOIN drivers d ON d.phone = ws.phone_number
     WHERE ws.current_step IS NOT NULL
-    AND ws.current_step NOT IN ('rider_ready','in_review','rider_approved')
+    AND ws.current_step NOT IN ('rider_ready','rider_approved')
 ");
 
 $stepsMap = [
@@ -54,7 +61,11 @@ while ($row = $query->fetch(PDO::FETCH_ASSOC)) {
 
     $phone = $row['phone_number'];
     $currentStep = $row['current_step'];
-    $lastMessageAt = $row['last_message_at'];
+    $lastDriverTouch = $row['last_message_at'] ?? null;
+    $sessionUpdated = $row['session_updated_at'] ?? null;
+    $lastTouch = (is_string($lastDriverTouch) && $lastDriverTouch !== '')
+        ? $lastDriverTouch
+        : (is_string($sessionUpdated) ? $sessionUpdated : null);
 
     echo "Onboarding reminder → {$phone} ({$currentStep})\n";
 
@@ -69,21 +80,16 @@ while ($row = $query->fetch(PDO::FETCH_ASSOC)) {
         "{$nextStepMessage}\n\n".
         "Send *hi* to continue or message 07019240234 if you have any questions.";
 
-    // Check if within 24-hour messaging window
-    if (isWithinMessagingWindow($lastMessageAt)) {
-        // Send regular message
+    if (WhatsAppMessagingWindow::isWithinCustomerCareWindow($lastTouch)) {
         $whatsapp->sendMessage($phone, $messageText);
         echo "  → Sent regular message\n";
     } else {
-        // Send template (you need to create this in Meta Business Manager)
-        // Template name: "incomplete_onboarding_reminder"
-        // For now, we'll skip or send template if you have it set up
         $whatsapp->sendTemplate(
             $phone,
             'incomplete_onboarding_reminder', // Create this template in Meta
             [$nextStepMessage]
         );
-        echo "  → Sent template (outside 24hr window)\n";
+        echo "  → Sent template (outside ~23h30m window)\n";
     }
 }
 
@@ -119,8 +125,7 @@ while ($row = $locationQuery->fetch(PDO::FETCH_ASSOC)) {
         "Use Whatsapp's location📍 feature to select the location on the map\n1. Tap the '+' icon\n2. Select 'Location'\n3. Choose 'Send your current location' or pick a spot on the map\n\n".
         "You can update this anytime as you change locations.\n\n";
 
-    // Check if within 24-hour messaging window
-    if (isWithinMessagingWindow($lastMessageAt)) {
+    if (WhatsAppMessagingWindow::isWithinCustomerCareWindow($lastMessageAt)) {
         // Send regular message
         $whatsapp->sendMessage($phone, $messageText);
         echo "  → Sent regular message\n";
@@ -131,30 +136,8 @@ while ($row = $locationQuery->fetch(PDO::FETCH_ASSOC)) {
             'location_setup_reminder', // Create this template in Meta
             [$firstName]
         );
-        echo "  → Sent template (outside 24hr window)\n";
+        echo "  → Sent template (outside ~23h30m window)\n";
     }
 }
 
 echo "Cron finished\n";
-
-/**
- * Helper function to check if we're within WhatsApp's 24-hour messaging window
- * 
- * @param string|null $lastMessageAt MySQL timestamp
- * @return bool True if within window, false otherwise
- */
-function isWithinMessagingWindow($lastMessageAt)
-{
-    if ($lastMessageAt === null) {
-        return false; // Never messaged - outside window
-    }
-
-    $lastMessageTime = strtotime($lastMessageAt);
-    $currentTime = time();
-    $timeSinceLastMessage = $currentTime - $lastMessageTime;
-    
-    // 24 hours in seconds
-    $messagingWindowSeconds = 24 * 60 * 60;
-
-    return $timeSinceLastMessage < $messagingWindowSeconds;
-}

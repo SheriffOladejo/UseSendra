@@ -6,7 +6,9 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "tsx watch src/index.ts"
+    "dev": "tsx watch src/index.ts",
+    "rotate-wallets": "tsx src/scripts/rotate-wallets.ts",
+    "rotate-wallets:dry-run": "tsx src/scripts/rotate-wallets.ts --dry-run"
   },
   "dependencies": {
     "@aptos-labs/ts-sdk": "^6.3.1",
@@ -20,6 +22,7 @@
   "devDependencies": {
     "@types/express": "^4.17.21",
     "@types/node": "^20.10.0",
+    "mysql2": "^3.22.4",
     "tsx": "^4.21.0",
     "typescript": "^5.3.2"
   }

@@ -3,18 +3,12 @@ import { Router, Request, Response } from 'express';
 import { Account } from '@aptos-labs/ts-sdk';
 import { aptos } from '../services/aptosClient.js';
 import { encryptKey, decryptKey } from '../services/keyManager.js';
+import { requireInternalSecret } from '../middleware/internalSecretAuth.js';
+import { metadataForSymbol } from '../config/aptosAssets.js';
 
 const router = Router();
 
-// ─── Middleware: verify internal secret ───────────────────────────────────────
-router.use((req: Request, res: Response, next) => {
-  const secret = req.headers['x-internal-secret'];
-  if (secret !== process.env.INTERNAL_API_SECRET) {
-    res.status(401).json({ success: false, error: 'Unauthorized' });
-    return;
-  }
-  next();
-});
+router.use(requireInternalSecret);
 
 // ─── POST /accounts/create ────────────────────────────────────────────────────
 /**
@@ -74,10 +68,15 @@ router.post('/balance', async (req: Request, res: Response) => {
     return;
   }
 
-  const ASSET_METADATA: Record<string, string> = {
-    USDC: '0x69091fbab5f7d635ee7ac5098cf0c1efbe31d68fec0f2cd565e8d168daf52832',
-    USDT: '0x5724aca06f8bd505e9eaf2337d16d6fc310c96ecfd331269bf2f76840d3f355a',
-  };
+  const usdcMeta = metadataForSymbol('USDC');
+  const usdtMeta = metadataForSymbol('USDT');
+  if (!usdcMeta || !usdtMeta) {
+    res.status(500).json({
+      success: false,
+      error: 'USDC/USDT metadata not configured for APTOS_NETWORK (set APTOS_NETWORK or metadata env overrides).',
+    });
+    return;
+  }
 
   try {
     // APT balance
@@ -109,8 +108,8 @@ router.post('/balance', async (req: Request, res: Response) => {
     };
 
     const [usdcRaw, usdtRaw] = await Promise.all([
-      getFaBalance(ASSET_METADATA.USDC),
-      getFaBalance(ASSET_METADATA.USDT),
+      getFaBalance(usdcMeta),
+      getFaBalance(usdtMeta),
     ]);
 
     res.json({

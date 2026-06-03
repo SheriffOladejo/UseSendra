@@ -22,16 +22,32 @@ class VehicleBrandStep extends BaseStep
             'vehicle_brand_model' => $brandModel
         ]);
 
-        // Move to next step
-        $this->nextStep($phone, 'rider_ready');
+        // Auto-approve if IDs verified successfully (NIN + plate) during onboarding.
+        $sd = $this->getSessionData();
+        $kyc = is_array($sd['kyc'] ?? null) ? $sd['kyc'] : [];
+        $ninOk = isset($kyc['nin']['success']) ? (bool) $kyc['nin']['success'] : false;
+        $plateOk = isset($kyc['plate']['success']) ? (bool) $kyc['plate']['success'] : false;
 
-        // Send multilingual info message
-        $this->whatsappService->sendMessage(
-            $phone,
-            $t->get('in_review_message')
-        );
+        if ($ninOk && $plateOk) {
+            $this->driverModel->update($phone, [
+                'verification_status' => 'approved',
+            ]);
 
-        return '';
+            // Next: collect operating bus-stop so they can start receiving nearby offers.
+            $this->nextStep($phone, 'rider_location_preference');
+
+            return "✅ *Verification successful!*\n\n"
+                . "Your rider account is now approved.\n\n"
+                . "Next step: please set your *preferred bus-stop location* so we can send delivery requests near you.\n\n"
+                . $t->get('rider_location_request');
+        }
+
+        // IDs not verified: continue onboarding without hard blocking.
+        $this->nextStep($phone, 'rider_location_preference');
+
+        return "✅ Profile saved.\n\n"
+            . "Next step: please set your *preferred bus-stop location*.\n\n"
+            . $t->get('rider_location_request');
     }
 
     public function validateInput(string $message): bool

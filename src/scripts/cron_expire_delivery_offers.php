@@ -1,17 +1,22 @@
 <?php
 
-require __DIR__ . '../../../vendor/autoload.php';
+require dirname(__DIR__, 2) . '/vendor/autoload.php';
+require dirname(__DIR__, 2) . '/config/bootstrap_env.php';
+
+$host = $_ENV['LOGISTICS_DB_HOST'] ?? getenv('LOGISTICS_DB_HOST') ?: 'localhost';
+$name = $_ENV['LOGISTICS_DB_NAME'] ?? getenv('LOGISTICS_DB_NAME') ?: 'sendra_logistics_db';
+$user = $_ENV['LOGISTICS_DB_USER'] ?? getenv('LOGISTICS_DB_USER') ?: 'developer';
+$pass = $_ENV['LOGISTICS_DB_PASS'] ?? getenv('LOGISTICS_DB_PASS') ?: '';
 
 $db = new PDO(
-    'mysql:host=localhost;dbname=sendra_logistics_db;charset=utf8mb4',
-    'developer',
-    'Stipendly@2026',
+    "mysql:host={$host};dbname={$name};charset=utf8mb4",
+    $user,
+    $pass,
     [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
 );
 
 try {
 
-    // Find offers that expired
     $stmt = $db->prepare("
         SELECT id, request_id, driver_id
         FROM delivery_offers
@@ -29,7 +34,6 @@ try {
 
     foreach ($expiredOffers as $offer) {
 
-        // Update status
         $update = $db->prepare("
             UPDATE delivery_offers
             SET status = 'rejected'
@@ -37,12 +41,12 @@ try {
         ");
 
         $update->execute([
-            'id' => $offer['id']
+            'id' => $offer['id'],
         ]);
 
         echo "Offer {$offer['id']} expired and rejected\n";
     }
 
-} catch (Exception $e) {
-    error_log("Cron error: " . $e->getMessage());
+} catch (\Exception $e) {
+    error_log('Cron error: ' . $e->getMessage());
 }

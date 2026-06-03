@@ -3,13 +3,25 @@
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
 
-// Configuration
-$DB_HOST = 'localhost';
-$DB_NAME = 'sendra_db';
-$DB_USER = 'developer';
-$DB_PASS = 'Stipendly@2026';
+require __DIR__ . '/vendor/autoload.php';
+require __DIR__ . '/config/bootstrap_env.php';
 
-$APTOS_GRAPHQL_ENDPOINT = 'https://api.testnet.aptoslabs.com/v1/graphql'; // Change to mainnet for production
+use App\Services\NoditIndexerDepositService;
+use App\Services\WebhookAuthService;
+
+$DB_HOST = $_ENV['APTOS_DB_HOST'] ?? getenv('APTOS_DB_HOST') ?: 'localhost';
+$DB_NAME = $_ENV['APTOS_DB_NAME'] ?? getenv('APTOS_DB_NAME') ?: 'sendra_db';
+$DB_USER = $_ENV['APTOS_DB_USER'] ?? getenv('APTOS_DB_USER') ?: 'developer';
+$DB_PASS = $_ENV['APTOS_DB_PASS'] ?? getenv('APTOS_DB_PASS') ?: '';
+
+$noditIndexer = new NoditIndexerDepositService();
+$USE_NODIT_INDEXER = $noditIndexer->isConfigured()
+    && strtolower(trim((string) ($_ENV['NODIT_USE_INDEXER'] ?? getenv('NODIT_USE_INDEXER') ?: '1'))) !== '0';
+
+$APTOS_GRAPHQL_ENDPOINT = $USE_NODIT_INDEXER
+    ? $noditIndexer->getGraphqlUrl()
+    : (trim((string) ($_ENV['APTOS_GRAPHQL_URL'] ?? getenv('APTOS_GRAPHQL_URL') ?: ''))
+        ?: 'https://api.testnet.aptoslabs.com/v1/graphql');
 $WHATSAPP_WEBHOOK_URL = 'https://coinectra.stipendly.app/webhook.php?action=deposit';
 $LOG_FILE = '/var/www/html/coinectra/aptos-indexer-webhook.log';
 
@@ -30,10 +42,45 @@ function logMessage($message) {
     file_put_contents($LOG_FILE, "[$timestamp] $message\n", FILE_APPEND);
 }
 
-// GraphQL Query
+/** @return list<string> */
+function getSendraWalletAddresses() {
+    $pdo = getDB();
+    if (!$pdo) {
+        return [];
+    }
+    $stmt = $pdo->query(
+        "SELECT aptos_address FROM users WHERE aptos_address IS NOT NULL AND aptos_address != ''"
+    );
+    $rows = $stmt ? $stmt->fetchAll(PDO::FETCH_COLUMN) : [];
+
+    return is_array($rows) ? $rows : [];
+}
+
 function queryAptosIndexer($lastProcessedVersion = 0) {
+    global $USE_NODIT_INDEXER, $noditIndexer;
+
+    logMessage('Querying indexer from version ' . $lastProcessedVersion
+        . ($USE_NODIT_INDEXER ? ' (Nodit GraphQL, Sendra wallets only)' : ' (public Aptos Labs)'));
+
+    if ($USE_NODIT_INDEXER) {
+        $owners = getSendraWalletAddresses();
+        if ($owners === []) {
+            logMessage('No Sendra wallet addresses in DB');
+
+            return [];
+        }
+        $activities = $noditIndexer->fetchDepositsForOwners($owners, (int) $lastProcessedVersion, 100);
+        if ($activities === null) {
+            logMessage('Nodit indexer error: ' . ($noditIndexer->getLastError() ?? 'unknown'));
+
+            return null;
+        }
+
+        return $activities;
+    }
+
     global $APTOS_GRAPHQL_ENDPOINT, $TOKEN_METADATA;
-    
+
     $query = <<<'GRAPHQL'
 query GetFungibleAssetActivities($where: fungible_asset_activities_bool_exp) {
   fungible_asset_activities(
@@ -54,55 +101,46 @@ query GetFungibleAssetActivities($where: fungible_asset_activities_bool_exp) {
 GRAPHQL;
 
     $assetTypes = array_keys($TOKEN_METADATA);
-    
     $variables = [
         'where' => [
             'asset_type' => ['_in' => $assetTypes],
             'type' => ['_eq' => '0x1::fungible_asset::Deposit'],
             'is_transaction_success' => ['_eq' => true],
-            'transaction_version' => ['_gt' => (string)$lastProcessedVersion]
-        ]
+            'transaction_version' => ['_gt' => (string) $lastProcessedVersion],
+        ],
     ];
-    
-    $payload = json_encode([
-        'query' => $query,
-        'variables' => $variables
-    ]);
-    
-    logMessage("Querying Aptos Indexer from version: $lastProcessedVersion");
-    
+
     $ch = curl_init($APTOS_GRAPHQL_ENDPOINT);
-    curl_setopt($ch, CURLOPT_POST, true);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
-    curl_setopt($ch, CURLOPT_HTTPHEADER, [
-        'Content-Type: application/json'
+    curl_setopt_array($ch, [
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => json_encode(['query' => $query, 'variables' => $variables]),
+        CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => 30,
     ]);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 30);
-    
     $response = curl_exec($ch);
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    
+    $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
     if (curl_errno($ch)) {
-        logMessage("cURL Error: " . curl_error($ch));
+        logMessage('cURL Error: ' . curl_error($ch));
         curl_close($ch);
+
         return null;
     }
-    
     curl_close($ch);
-    
+
     if ($httpCode !== 200) {
         logMessage("HTTP Error: $httpCode - Response: $response");
+
         return null;
     }
-    
+
     $data = json_decode($response, true);
-    
     if (!isset($data['data']['fungible_asset_activities'])) {
-        logMessage("Invalid response structure: " . $response);
+        logMessage('Invalid response structure: ' . $response);
+
         return null;
     }
-    
+
     return $data['data']['fungible_asset_activities'];
 }
 
@@ -185,6 +223,40 @@ function isTransactionProcessed($version) {
     return $stmt->fetchColumn() > 0;
 }
 
+/** Microseconds for aptos_webhook_tracker.transaction_timestamp (bigint). */
+function indexerTimestampMicros($raw): int
+{
+    if (is_string($raw) && preg_match('/^\d{4}-\d{2}-\d{2}/', $raw)) {
+        $t = strtotime($raw);
+
+        return $t ? $t * 1000000 : (int) (microtime(true) * 1000000);
+    }
+    $micros = (string) $raw;
+    if ($micros !== '' && ctype_digit($micros)) {
+        return (int) $micros;
+    }
+
+    return (int) (microtime(true) * 1000000);
+}
+
+function explorerNetworkParam(): string
+{
+    $raw = $_ENV['APTOS_EXPLORER_NETWORK'] ?? getenv('APTOS_EXPLORER_NETWORK') ?: 'testnet';
+    $net = strtolower(trim((string) $raw));
+
+    return $net === 'mainnet' ? 'mainnet' : 'testnet';
+}
+
+function trackerRowCount(): int
+{
+    $pdo = getDB();
+    if (!$pdo) {
+        return 0;
+    }
+
+    return (int) $pdo->query('SELECT COUNT(*) FROM aptos_webhook_tracker')->fetchColumn();
+}
+
 // Save processed transaction
 function saveTransaction($activity, $currency, $notified = false) {
     $pdo = getDB();
@@ -199,7 +271,7 @@ function saveTransaction($activity, $currency, $notified = false) {
         
         $stmt->execute([
             'version' => $activity['transaction_version'],
-            'timestamp' => $activity['transaction_timestamp'],
+            'timestamp' => indexerTimestampMicros($activity['transaction_timestamp'] ?? ''),
             'owner' => $activity['owner_address'],
             'amount' => $activity['amount'],
             'asset' => $activity['asset_type'],
@@ -220,18 +292,26 @@ function sendNotification($user, $activity, $currency) {
     
     $decimals = 6; // USDC/USDT use 6 decimals
     $amount = $activity['amount'] / pow(10, $decimals);
-    
-    $timestamp = date('Y-m-d H:i:s', intval($activity['transaction_timestamp']) / 1000000);
-    
+
+    $version = (string) ($activity['transaction_version'] ?? '');
+    $txHash = (string) ($activity['transaction_hash'] ?? '');
+    $sender = (string) ($activity['sender'] ?? 'unknown');
+    $net = explorerNetworkParam();
+    $explorerUrl = $txHash !== ''
+        ? "https://explorer.aptoslabs.com/txn/{$txHash}?network={$net}"
+        : ($version !== '' ? "https://explorer.aptoslabs.com/txn/{$version}?network={$net}" : '');
+
     $payload = [
         'phone_number' => $user['phone_number'],
         'wallet_address' => $activity['owner_address'],
         'amount' => $amount,
         'currency' => $currency,
         'network' => 'aptos',
-        'transaction_version' => $activity['transaction_version'],
-        'timestamp' => $timestamp,
-        'explorer_url' => "https://explorer.aptoslabs.com/txn/{$activity['transaction_version']}?network=testnet"
+        'sender_address' => $sender,
+        'transaction_hash' => $txHash !== '' ? $txHash : $version,
+        'transaction_version' => $version,
+        'timestamp' => date('Y-m-d H:i:s', (int) floor(indexerTimestampMicros($activity['transaction_timestamp'] ?? '') / 1000000)),
+        'explorer_url' => $explorerUrl,
     ];
     
     $jsonPayload = json_encode($payload);
@@ -241,9 +321,7 @@ function sendNotification($user, $activity, $currency) {
     $ch = curl_init($WHATSAPP_WEBHOOK_URL);
     curl_setopt($ch, CURLOPT_POST, true);
     curl_setopt($ch, CURLOPT_POSTFIELDS, $jsonPayload);
-    curl_setopt($ch, CURLOPT_HTTPHEADER, [
-        'Content-Type: application/json'
-    ]);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, WebhookAuthService::internalAuthCurlHeaders());
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_TIMEOUT, 10);
     
@@ -276,47 +354,46 @@ function processActivities($activities) {
     $processedCount = 0;
     $maxVersion = 0;
     
+    $silentCatchup = trackerRowCount() === 0
+        && strtolower(trim((string) ($_ENV['NODIT_INDEXER_SILENT_CATCHUP'] ?? getenv('NODIT_INDEXER_SILENT_CATCHUP') ?: '1'))) !== '0';
+
+    if ($silentCatchup) {
+        logMessage('First run: marking existing deposits in tracker without WhatsApp (NODIT_INDEXER_SILENT_CATCHUP=1)');
+    }
+
     foreach ($activities as $activity) {
-        $version = (int)$activity['transaction_version'];
-        
-        // Track max version
+        $version = (int) $activity['transaction_version'];
+
         if ($version > $maxVersion) {
             $maxVersion = $version;
         }
-        
-        // Skip if already processed
+
         if (isTransactionProcessed($version)) {
-            logMessage("Transaction $version already processed, skipping");
             continue;
         }
-        
-        // Get currency from metadata
+
         $currency = $TOKEN_METADATA[$activity['asset_type']] ?? 'UNKNOWN';
-        
         if ($currency === 'UNKNOWN') {
-            logMessage("Unknown asset type: {$activity['asset_type']}");
             saveTransaction($activity, $currency, false);
             continue;
         }
-        
-        // Normalize and check if user exists
+
         $normalizedAddress = normalizeAddress($activity['owner_address']);
         $user = getUserByAddress($normalizedAddress);
-        
         if (!$user) {
-            logMessage("Address not in database: $normalizedAddress");
             saveTransaction($activity, $currency, false);
             continue;
         }
-        
-        logMessage("Match found! User ID: {$user['Id']}, Amount: {$activity['amount']}, Currency: $currency");
-        
-        // Send notification
+
+        if ($silentCatchup) {
+            saveTransaction($activity, $currency, true);
+            $processedCount++;
+            continue;
+        }
+
+        logMessage("Match: user {$user['Id']}, {$activity['amount']} $currency, v$version");
         $notified = sendNotification($user, $activity, $currency);
-        
-        // Save transaction
         saveTransaction($activity, $currency, $notified);
-        
         $processedCount++;
     }
     

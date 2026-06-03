@@ -38,14 +38,26 @@ class ChooseRoleStep extends BaseStep
                 $this->getUsername()
             );
 
-            $this->nextStep($phone, 'pickup_address');
+            // Start a new draft request immediately (short flow starts with pickup pin)
+            $user = $this->userModel->findByPhone($phone);
+            if ($user) {
+                $requestId = $this->deliveryRequestModel->create([
+                    'user_id' => $user['id'],
+                    'sender_phone' => $phone,
+                ]);
+                if ($requestId) {
+                    $this->sessionModel->update($phone, ['delivery_request_id' => $requestId]);
+                }
+            }
 
-            $this->whatsappService->sendMessage(
-                $phone,
-                $t->get('sender_menu_intro')
-            );
+            $this->nextStep($phone, 'pickup_location');
 
-            return '';
+            return "Nice, let’s get this moving.\n\n"
+                . "First, where are we picking up from?\n\n"
+                . "Please share the pickup location using WhatsApp's location sharing feature:\n"
+                . "1. Tap the '➕' icon (iOS) or '📎' (Android)\n"
+                . "2. Select 'Location'\n"
+                . "3. Search on the map or send your current location.";
         }
 
         if ($message === "rider") {

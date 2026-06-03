@@ -4,6 +4,7 @@ namespace App\Steps\Driver;
 
 use App\Steps\BaseStep;
 use App\Utils\Translator;
+use App\Utils\VehicleTypeHelper;
 
 class VehicleTypeStep extends BaseStep
 {
@@ -13,15 +14,13 @@ class VehicleTypeStep extends BaseStep
         $lang  = $session['language'] ?? 'en';
         $t     = new Translator($lang);
 
-        $validTypes = [
-            'motorcycle' => $t->get('vehicle_motorcycle'),
-            'keke'       => $t->get('vehicle_keke')
-        ];
+        $validTypes = VehicleTypeHelper::driverButtonLabels($t);
 
         $msg = strtolower(trim($message));
         $msg = ltrim($msg, '/');
+        $normalized = VehicleTypeHelper::normalize($msg);
 
-        if (!array_key_exists($msg, $validTypes)) {
+        if ($normalized === null) {
             $this->whatsappService->sendButtonMessage(
                 $phone,
                 $t->get('invalid_vehicle_type'),
@@ -30,11 +29,13 @@ class VehicleTypeStep extends BaseStep
             return '';
         }
 
-        // Save vehicle type
-        $this->driverModel->update($phone, ['vehicle_type' => $msg]);
+        $this->driverModel->update($phone, ['vehicle_type' => $normalized]);
 
-        // Move to next step
         $this->nextStep($phone, 'nin');
+
+        if ($normalized === VehicleTypeHelper::BICYCLE) {
+            return $t->get('bicycle_onboarding_nin_prompt');
+        }
 
         return $t->get('vehicle_type_prompt');
     }
@@ -46,23 +47,22 @@ class VehicleTypeStep extends BaseStep
         $lang = $this->session['language'] ?? 'en';
         $t    = new Translator($lang);
 
-        $validKeys = ['motorcycle', 'keke'];
-
-        if (!in_array($msg, $validKeys)) {
-            $validTypes = [
-                'motorcycle' => $t->get('vehicle_motorcycle'),
-                'keke'       => $t->get('vehicle_keke')
-            ];
-            $this->whatsappService->sendButtonMessage(
-                $this->session['phone_number'],
-                $t->get('invalid_vehicle_type'),
-                $validTypes
-            );
+        if (VehicleTypeHelper::normalize($msg) === null) {
             $this->validationError = $t->get('invalid_vehicle_type');
-            // optionally resend buttons here too
             return false;
         }
 
         return true;
+    }
+
+    public function sendValidationFailureFeedback(string $phoneNumber): void
+    {
+        $lang = $this->session['language'] ?? 'en';
+        $t    = new Translator($lang);
+        $this->whatsappService->sendButtonMessage(
+            $phoneNumber,
+            $t->get('invalid_vehicle_type'),
+            VehicleTypeHelper::driverButtonLabels($t)
+        );
     }
 }
