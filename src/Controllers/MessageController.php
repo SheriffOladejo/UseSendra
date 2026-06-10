@@ -2,6 +2,7 @@
 
 namespace App\Controllers;
 
+use App\Services\PinConfirmTokenService;
 use App\Services\WhatsAppService;
 use App\Controllers\AuthController;
 
@@ -73,10 +74,10 @@ class MessageController
             return ['success' => false, 'reason' => 'awaiting_pin'];
         }
 
-        // ── 3. Pending transaction awaiting PIN confirmation ──────────────────
+        // ── 3. Pending transaction awaiting PIN confirmation (web PIN page only) ─
         if (!empty($user['pending_tx_id'])) {
             if (preg_match('/^\d{6}$/', $message)) {
-                return $this->handlePinConfirmation($from, $message, $user);
+                return $this->rejectInChatPinEntry($from, $user);
             }
             // Support the Cancel button payload (`cancel_<id>`) while in pending state.
             if (str_starts_with($messageLower, 'cancel_')) {
@@ -86,11 +87,7 @@ class MessageController
                 return $this->handleCancelTransaction($from, $user['pending_tx_id']);
             }
             // Has pending tx but typed something else — re-prompt
-            $this->whatsappService->sendMessage(
-                $from,
-                "\u23F3 You have a pending transaction.\n\n" .
-                    "Enter your *6-digit PIN* to confirm, or type *cancel* to abort."
-            );
+            $this->resendPinConfirmLink($from, $user);
             return ['success' => false, 'reason' => 'awaiting_pin_confirmation'];
         }
 
@@ -384,24 +381,141 @@ class MessageController
     }
 
     /**
-     * PIN confirmation for a pending transaction.
+     * Confirm a pending transaction via the secure web PIN page.
+     *
+     * @return array{success: bool, error?: string}
+     */
+    public function confirmPendingTransactionWithPin(
+        string $phone,
+        string $pin,
+        string $pendingId,
+        bool $notifyWhatsAppOnWrongPin = true
+    ): array {
+        $userResult = $this->authController->getUser($phone);
+        $user = $userResult['user'] ?? null;
+        if (!$user) {
+            return ['success' => false, 'error' => 'Account not found.'];
+        }
+
+        $result = $this->executePinConfirmation($phone, $pin, $user, $pendingId, $notifyWhatsAppOnWrongPin);
+
+        return !empty($result['success'])
+            ? ['success' => true]
+            : ['success' => false, 'error' => (string) ($result['error'] ?? 'Confirmation failed.')];
+    }
+
+    /**
+     * @return ?array<string, mixed>
+     */
+    public function getPendingTransactionForWeb(string $pendingId): ?array
+    {
+        $row = $this->getPendingTransaction($pendingId);
+
+        return $row !== false ? $row : null;
+    }
+
+    /**
+     * Human-readable summary for confirm-pin.php.
+     *
+     * @param array<string, mixed> $pending
+     * @return array{title: string, subtitle: string, rows: list<array{label: string, value: string}>}
+     */
+    public function describePendingTransactionForWeb(array $pending): array
+    {
+        $txType = (string) ($pending['tx_type'] ?? 'transfer');
+        $amount = (string) ($pending['amount'] ?? '');
+        $currency = strtoupper((string) ($pending['currency'] ?? ''));
+        $meta = json_decode((string) ($pending['human_description'] ?? ''), true);
+        if (!is_array($meta)) {
+            $meta = [];
+        }
+
+        $rows = [];
+        $title = 'Confirm transaction';
+        $subtitle = 'Review the details below, then enter your PIN.';
+
+        if ($txType === 'transfer') {
+            $recipient = (string) ($pending['recipient_address'] ?? '');
+            $short = strlen($recipient) > 16
+                ? substr($recipient, 0, 8) . '…' . substr($recipient, -4)
+                : $recipient;
+            $rows[] = ['label' => 'Action', 'value' => 'Send crypto'];
+            $rows[] = ['label' => 'Amount', 'value' => trim($amount . ' ' . $currency)];
+            $rows[] = ['label' => 'To', 'value' => $short];
+        } elseif (str_contains($txType, 'offramp') || ($meta['kind'] ?? '') !== '') {
+            $title = 'Confirm payout';
+            $subtitle = 'Enter your PIN to authorize this cash-out from your wallet.';
+            $recvNgn = (string) ($meta['receive_ngn_display'] ?? '');
+            if ($recvNgn !== '' && $recvNgn !== '—') {
+                $rows[] = ['label' => 'You receive', 'value' => '≈ ₦' . $recvNgn];
+            }
+            $rows[] = ['label' => 'Wallet debit', 'value' => trim($amount . ' ' . $currency)];
+            $name = trim((string) ($meta['account_name'] ?? ''));
+            $acct = trim((string) ($meta['account_number'] ?? ''));
+            $bank = trim((string) ($meta['bank_name'] ?? ''));
+            if ($name !== '') {
+                $rows[] = ['label' => 'Account name', 'value' => $name];
+            }
+            if ($acct !== '') {
+                $rows[] = ['label' => 'Account', 'value' => $acct];
+            }
+            if ($bank !== '') {
+                $rows[] = ['label' => 'Bank', 'value' => $bank];
+            }
+        } elseif ($txType === 'panora_wallet_swap') {
+            $title = 'Confirm swap';
+            $subtitle = 'Enter your PIN to swap assets in your Sendra wallet.';
+            $fromAsset = strtoupper((string) ($meta['from_asset'] ?? $currency));
+            $toAsset = strtoupper((string) ($meta['to_asset'] ?? ''));
+            $rows[] = ['label' => 'Swap', 'value' => trim($amount . ' ' . $fromAsset) . ' → ' . $toAsset];
+            $estOut = (string) ($meta['expected_out'] ?? '');
+            if ($estOut !== '') {
+                $rows[] = ['label' => 'Estimated output', 'value' => '≈ ' . $estOut . ' ' . $toAsset];
+            }
+        } else {
+            $rows[] = ['label' => 'Amount', 'value' => trim($amount . ' ' . $currency)];
+            $rows[] = ['label' => 'Type', 'value' => $txType];
+        }
+
+        return [
+            'title' => $title,
+            'subtitle' => $subtitle,
+            'rows' => $rows,
+        ];
+    }
+
+    /**
+     * PIN confirmation for a pending transaction (legacy in-chat path — disabled).
      */
     private function handlePinConfirmation($from, $pin, $user)
     {
-        error_log("PIN_CONFIRM: from=$from pending_tx_id=" . ($user['pending_tx_id'] ?? 'NULL'));
+        $pendingId = trim((string) ($user['pending_tx_id'] ?? ''));
+
+        return $this->executePinConfirmation($from, $pin, $user, $pendingId, true);
+    }
+
+    /**
+     * @return array{success: bool, error?: string}
+     */
+    private function executePinConfirmation($from, $pin, $user, $pendingId, bool $notifyWhatsAppOnWrongPin = true)
+    {
+        error_log("PIN_CONFIRM: from=$from pending_tx_id=" . $pendingId);
 
         // Verify PIN
         $pinValid = $this->userModel->verifyPin($from, $pin);
         error_log("PIN_CONFIRM: pin_valid=" . ($pinValid ? 'YES' : 'NO'));
         if (!$pinValid) {
-            $this->whatsappService->sendMessage(
-                $from,
-                "❌ Wrong PIN. Please try again, or type *cancel* to abort."
-            );
-            return ['success' => false];
+            if ($notifyWhatsAppOnWrongPin) {
+                $this->whatsappService->sendMessage(
+                    $from,
+                    "❌ Wrong PIN. Please try again, or type *cancel* to abort."
+                );
+            }
+
+            return ['success' => false, 'error' => 'Wrong PIN. Please try again.'];
         }
 
-        $pendingId = trim((string) ($user['pending_tx_id'] ?? ''));
+        $pendingId = trim((string) $pendingId);
         if ($pendingId === '') {
             $this->whatsappService->sendMessage(
                 $from,
@@ -732,16 +846,95 @@ class MessageController
 
         $this->userModel->setPendingTransaction($from, $pendingId);
 
-        $this->whatsappService->sendButtonMessage(
+        $this->sendPinConfirmPrompt(
             $from,
+            $pendingId,
             "📤 *Confirm Transaction*\n\n" .
                 "Send: *{$amount} {$currency}*\n" .
-                "To: {$displayRecipient}\n\n" .
-                "Enter your *6-digit PIN* to confirm:",
-            ['cancel_' . $pendingId => 'Cancel']
+                "To: {$displayRecipient}"
         );
 
         return ['success' => true, 'pending_id' => $pendingId];
+    }
+
+    /**
+     * Send CTA to secure web PIN page (PIN never typed in WhatsApp chat).
+     */
+    private function sendPinConfirmPrompt(string $from, string $pendingId, string $bodyText): void
+    {
+        $row = $this->getPendingTransactionRow($pendingId);
+        $expiresAt = $row ? strtotime((string) $row['expires_at']) : false;
+        if ($expiresAt === false || $expiresAt <= 0) {
+            $expiresAt = time() + 300;
+        }
+
+        $url = PinConfirmTokenService::buildConfirmUrl($pendingId, $from, (int) $expiresAt);
+
+        $this->whatsappService->sendCTAUrlButton(
+            $from,
+            $bodyText . "\n\n" .
+                "🔐 Tap *Enter PIN* below to confirm securely.\n" .
+                "_Your PIN is never stored in chat._\n\n" .
+                "Type *cancel* to abort.",
+            'Enter PIN',
+            $url
+        );
+
+        $this->whatsappService->sendButtonMessage(
+            $from,
+            'Need to cancel this transaction?',
+            ['cancel_' . $pendingId => 'Cancel']
+        );
+    }
+
+    /**
+     * @param array<string, mixed> $user
+     * @return array{success: false, reason: string}
+     */
+    private function rejectInChatPinEntry(string $from, array $user): array
+    {
+        $this->whatsappService->sendMessage(
+            $from,
+            "🔒 For your security, don't type your PIN in WhatsApp.\n\n" .
+                "Use the *Enter PIN* button from our last message instead."
+        );
+        $this->resendPinConfirmLink($from, $user);
+
+        return ['success' => false, 'reason' => 'pin_use_web'];
+    }
+
+    /**
+     * @param array<string, mixed> $user
+     */
+    private function resendPinConfirmLink(string $from, array $user): void
+    {
+        $pendingId = trim((string) ($user['pending_tx_id'] ?? ''));
+        if ($pendingId === '') {
+            return;
+        }
+
+        $pending = $this->getPendingTransactionRow($pendingId);
+        if ($pending === null) {
+            $this->whatsappService->sendMessage(
+                $from,
+                "⚠️ No pending transaction found. Please start again."
+            );
+            $this->userModel->clearPendingTransaction($from);
+
+            return;
+        }
+
+        $summary = $this->describePendingTransactionForWeb($pending);
+        $lines = array_map(
+            static fn (array $row): string => "*{$row['label']}:* {$row['value']}",
+            $summary['rows']
+        );
+
+        $this->sendPinConfirmPrompt(
+            $from,
+            $pendingId,
+            "⏳ *{$summary['title']}*\n\n" . implode("\n", $lines)
+        );
     }
 
     /**
@@ -3742,14 +3935,13 @@ class MessageController
         $this->clearSellChatContext($from);
 
         $recvNgn = (string) ($ctx['receive_ngn_display'] ?? '—');
-        $this->whatsappService->sendButtonMessage(
+        $this->sendPinConfirmPrompt(
             $from,
-            "🔐 *Enter your 6-digit PIN*\n\n" .
+            $pendingId,
+            "🔐 *Confirm payout*\n\n" .
             "*≈ ₦{$recvNgn}* payout to:\n*{$name}*\n`{$acct}` · *{$bankDisplay}*\n\n" .
             "Wallet debit: *{$amountStr} USDT*\n" .
-            "_(Swap to USDC in your wallet, then bridge to bank rail.)_\n\n" .
-            "Reply with your *PIN* to continue.",
-            ['cancel_' . $pendingId => 'Cancel']
+            "_(Swap to USDC in your wallet, then bridge to bank rail.)_"
         );
 
         return ['success' => true, 'action' => 'sell_pin_queued_panora_oneclick'];
@@ -4079,13 +4271,12 @@ class MessageController
         $this->clearSellChatContext($from);
 
         $recvNgn = (string) ($ctx['receive_ngn_display'] ?? '—');
-        $this->whatsappService->sendButtonMessage(
+        $this->sendPinConfirmPrompt(
             $from,
-            "🔐 *Enter your 6-digit PIN*\n\n" .
+            $pendingId,
+            "🔐 *Confirm payout*\n\n" .
             "*≈ ₦{$recvNgn}* payout to:\n*{$name}*\n`{$acct}` · *{$bankDisplay}*\n\n" .
-            "Wallet debit: *{$amountStr} {$asset}*\n\n" .
-            "Reply with your *PIN* to continue.",
-            ['cancel_' . $pendingId => 'Cancel']
+            "Wallet debit: *{$amountStr} {$asset}*"
         );
 
         return ['success' => true, 'action' => 'sell_pin_queued_oneclick'];
@@ -4223,14 +4414,13 @@ class MessageController
         $this->clearSellChatContext($from);
 
         $recvNgn = (string) ($ctx['receive_ngn_display'] ?? '—');
-        $this->whatsappService->sendButtonMessage(
+        $this->sendPinConfirmPrompt(
             $from,
-            "🔐 *Enter your 6-digit PIN*\n\n" .
+            $pendingId,
+            "🔐 *Confirm payout*\n\n" .
             "*≈ ₦{$recvNgn}* payout to:\n*{$name}*\n`{$acct}` · *{$bankDisplay}*\n\n" .
             "Wallet debit: *{$amountStr} {$asset}*\n\n" .
-            "Deposit:\n`{$deposit}`\n\n" .
-            "Reply with your *PIN* to continue.",
-            ['cancel_' . $pendingId => 'Cancel']
+            "Deposit:\n`{$deposit}`"
         );
 
         return ['success' => true, 'action' => 'sell_pin_queued'];
@@ -5860,7 +6050,7 @@ class MessageController
         if (!empty($user['pending_tx_id'])) {
             $this->whatsappService->sendMessage(
                 $from,
-                "⚠️ You already have a pending transaction. Enter your PIN or type *cancel* first."
+                "⚠️ You already have a pending transaction. Tap *Enter PIN* on our last message, or type *cancel*."
             );
 
             return ['success' => false, 'action' => 'swap_pending_exists'];
@@ -5946,13 +6136,13 @@ class MessageController
 
         $this->userModel->setPendingTransaction($from, $pendingId);
 
-        $this->whatsappService->sendButtonMessage(
+        $this->sendPinConfirmPrompt(
             $from,
-            "🔐 *Enter your 6-digit PIN*\n\n" .
+            $pendingId,
+            "🔐 *Confirm swap*\n\n" .
             "Swap *{$amountStr} {$fromAsset}* → *≈ {$estFmt} {$toAsset}*\n" .
             "(minimum *{$minFmt} {$toAsset}* after slippage)\n\n" .
-            "Funds stay in your Sendra wallet.",
-            ['cancel_' . $pendingId => 'Cancel']
+            "Funds stay in your Sendra wallet."
         );
 
         return ['success' => true, 'action' => 'swap_pin_queued'];
