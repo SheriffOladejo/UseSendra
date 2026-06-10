@@ -102,6 +102,80 @@ final class CentiivDirectPayService
     }
 
     /**
+     * Buyer marketplace checkout (multi-store cart).
+     *
+     * @param array{marketplace_order_id:int,type:string} $metadata
+     * @return array{url:string,link_id:?string,raw:array<string,mixed>}|null
+     */
+    public function createMarketplacePaymentLink(
+        float $amountNgn,
+        string $ourReference,
+        array $metadata
+    ): ?array {
+        if (!$this->isConfigured()) {
+            return null;
+        }
+
+        $orderId = (int) ($metadata['marketplace_order_id'] ?? 0);
+        $note = self::encodeMarketplaceNote($orderId, $ourReference);
+
+        $payload = [
+            'amount' => $amountNgn,
+            'note' => $note,
+            'currency' => 'NGN',
+            'allowedPaymentMethods' => 'NGN',
+            'metadata' => [
+                'resourceId' => $ourReference,
+                'resourceType' => 'sendra_marketplace_checkout',
+                'trackingId' => $ourReference,
+                'marketplaceOrderId' => (string) $orderId,
+            ],
+        ];
+
+        $raw = $this->postJson('/direct-pay', $payload);
+        if ($raw === null) {
+            return null;
+        }
+
+        $url = $this->extractPaymentUrl($raw);
+        if ($url === null || $url === '') {
+            error_log('Centiiv marketplace direct-pay: no URL in response: ' . json_encode($raw));
+
+            return null;
+        }
+
+        $data = $raw['data'] ?? null;
+        $linkId = is_array($data) && isset($data['id']) ? (string) $data['id'] : null;
+
+        return ['url' => $url, 'link_id' => $linkId, 'raw' => $raw];
+    }
+
+    public static function encodeMarketplaceNote(int $marketplaceOrderId, string $reference): string
+    {
+        return "sendra|marketplace_checkout|{$marketplaceOrderId}|0|{$reference}";
+    }
+
+    /**
+     * @return array{type:string,marketplace_order_id:int,reference:string}|null
+     */
+    public static function parseMarketplaceNote(?string $note): ?array
+    {
+        if ($note === null || $note === '' || !str_starts_with($note, 'sendra|')) {
+            return null;
+        }
+        $parts = explode('|', $note, 6);
+        if (count($parts) < 5 || ($parts[1] ?? '') !== 'marketplace_checkout') {
+            return null;
+        }
+
+        return [
+            'type' => 'marketplace_checkout',
+            'marketplace_order_id' => (int) $parts[2],
+            'reference' => $parts[4],
+        ];
+    }
+
+    /**
      * @return array<string, mixed>|null
      */
     public function getPaymentLink(string $id): ?array
@@ -199,6 +273,15 @@ final class CentiivDirectPayService
             $parsed = self::parseLogisticsNote($note);
             if ($parsed !== null && ($parsed['type'] ?? '') === 'driver_acceptance_fee') {
                 return $parsed;
+            }
+            $mkt = self::parseMarketplaceNote($note);
+            if ($mkt !== null) {
+                return [
+                    'type' => 'marketplace_checkout',
+                    'request_id' => $mkt['marketplace_order_id'],
+                    'driver_id' => 0,
+                    'reference' => $mkt['reference'],
+                ];
             }
         }
 

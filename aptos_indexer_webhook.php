@@ -56,6 +56,80 @@ function getSendraWalletAddresses() {
     return is_array($rows) ? $rows : [];
 }
 
+/** Wallets with open/recent buy — small set for Nodit lookback (avoids GraphQL time limits). */
+function getOnrampLookbackWalletAddresses(): array
+{
+    $pdo = getDB();
+    if (!$pdo) {
+        return [];
+    }
+
+    $addrs = [];
+    $stmt = $pdo->query(
+        "SELECT DISTINCT u.aptos_address
+         FROM pending_transactions p
+         INNER JOIN users u ON u.phone_number = p.user_phone
+         WHERE p.tx_type = 'onramp_oneclick_centiiv'
+           AND p.created_at > DATE_SUB(NOW(), INTERVAL 48 HOUR)
+           AND u.aptos_address IS NOT NULL AND u.aptos_address != ''"
+    );
+    if ($stmt) {
+        foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $a) {
+            if (is_string($a) && $a !== '') {
+                $addrs[] = $a;
+            }
+        }
+    }
+
+    return array_values(array_unique($addrs));
+}
+
+/** Remove only versions clearly above chain head (no per-row REST calls). */
+function purgeInvalidTrackerVersions(): int
+{
+    $pdo = getDB();
+    if (!$pdo) {
+        return 0;
+    }
+
+    $ledgerHead = aptosMainnetLedgerVersion();
+    if ($ledgerHead === null) {
+        return 0;
+    }
+
+    $cutoff = $ledgerHead + 1000;
+    $stmt = $pdo->prepare('DELETE FROM aptos_webhook_tracker WHERE transaction_version > ?');
+    $stmt->execute([$cutoff]);
+    $removed = (int) $stmt->rowCount();
+    if ($removed > 0) {
+        logMessage("Purged {$removed} tracker row(s) above ledger head {$ledgerHead}");
+    }
+
+    return $removed;
+}
+
+function maxValidTrackedVersion(): int
+{
+    $pdo = getDB();
+    if (!$pdo) {
+        return 0;
+    }
+
+    $ledgerHead = aptosMainnetLedgerVersion();
+    if ($ledgerHead === null) {
+        $stmt = $pdo->query('SELECT COALESCE(MAX(transaction_version), 0) FROM aptos_webhook_tracker');
+
+        return (int) $stmt->fetchColumn();
+    }
+
+    $stmt = $pdo->prepare(
+        'SELECT COALESCE(MAX(transaction_version), 0) FROM aptos_webhook_tracker WHERE transaction_version <= ?'
+    );
+    $stmt->execute([$ledgerHead]);
+
+    return (int) $stmt->fetchColumn();
+}
+
 function queryAptosIndexer($lastProcessedVersion = 0) {
     global $USE_NODIT_INDEXER, $noditIndexer;
 
@@ -74,6 +148,32 @@ function queryAptosIndexer($lastProcessedVersion = 0) {
             logMessage('Nodit indexer error: ' . ($noditIndexer->getLastError() ?? 'unknown'));
 
             return null;
+        }
+
+        $lookbackSec = (int) ($_ENV['NODIT_INDEXER_LOOKBACK_SECONDS'] ?? getenv('NODIT_INDEXER_LOOKBACK_SECONDS') ?: 86400);
+        if ($lookbackSec > 0 && $lastProcessedVersion > 0) {
+            $lookbackOwners = getOnrampLookbackWalletAddresses();
+            if ($lookbackOwners === []) {
+                $lookbackOwners = $owners;
+            }
+            $missed = $noditIndexer->fetchDepositsBelowCursorRecent($lookbackOwners, (int) $lastProcessedVersion, $lookbackSec, 30);
+            if ($missed === null) {
+                logMessage('Nodit lookback error: ' . ($noditIndexer->getLastError() ?? 'unknown'));
+            } elseif ($missed !== []) {
+                logMessage('Lookback found ' . count($missed) . ' deposit(s) below cursor ' . $lastProcessedVersion);
+                $seen = [];
+                foreach ($activities as $a) {
+                    $seen[(string) ($a['transaction_version'] ?? '')] = true;
+                }
+                foreach ($missed as $m) {
+                    $v = (string) ($m['transaction_version'] ?? '');
+                    if ($v !== '' && !isset($seen[$v])) {
+                        $activities[] = $m;
+                        $seen[$v] = true;
+                    }
+                }
+                usort($activities, fn ($a, $b) => (int) $a['transaction_version'] <=> (int) $b['transaction_version']);
+            }
         }
 
         return $activities;
@@ -158,21 +258,117 @@ function getDB() {
     }
 }
 
-// Get last processed version
+function aptosMainnetLedgerVersion(): ?int
+{
+    $net = explorerNetworkParam();
+    if ($net !== 'mainnet') {
+        return null;
+    }
+
+    $ch = curl_init('https://api.mainnet.aptoslabs.com/v1');
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => 10,
+    ]);
+    $raw = curl_exec($ch);
+    curl_close($ch);
+    $data = is_string($raw) ? json_decode($raw, true) : null;
+    if (!is_array($data) || empty($data['ledger_version'])) {
+        return null;
+    }
+
+    return (int) $data['ledger_version'];
+}
+
+function aptosTxVersionExistsOnChain(int $version): bool
+{
+    if ($version <= 0) {
+        return false;
+    }
+
+    $base = explorerNetworkParam() === 'mainnet'
+        ? 'https://api.mainnet.aptoslabs.com/v1'
+        : 'https://api.testnet.aptoslabs.com/v1';
+    $ch = curl_init("{$base}/transactions/by_version/{$version}");
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => 8,
+    ]);
+    $raw = curl_exec($ch);
+    $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if ($code === 429 || $code === 503 || $code === 0) {
+        return true;
+    }
+
+    if ($code !== 200) {
+        return false;
+    }
+
+    $data = is_string($raw) ? json_decode($raw, true) : null;
+
+    return is_array($data) && isset($data['version']);
+}
+
+// Get last processed version (reconcile if cursor ran ahead of chain / missed low versions)
 function getLastProcessedVersion() {
     $pdo = getDB();
     if (!$pdo) return 0;
+
+    purgeInvalidTrackerVersions();
     
     $stmt = $pdo->query("SELECT last_processed_version FROM aptos_webhook_settings WHERE id = 1");
     $result = $stmt->fetch(PDO::FETCH_ASSOC);
-    
-    return $result ? (int)$result['last_processed_version'] : 0;
+    $stored = $result ? (int)$result['last_processed_version'] : 0;
+
+    $ledgerHead = aptosMainnetLedgerVersion();
+    $maxValid = maxValidTrackedVersion();
+
+    if ($ledgerHead !== null && $stored > $ledgerHead + 1000) {
+        $reconciled = $maxValid > 0 ? min($maxValid, $ledgerHead) : max(0, $ledgerHead - 500000);
+        logMessage("Reconciling cursor {$stored} down to {$reconciled} (ledger head {$ledgerHead}, max valid tracked {$maxValid})");
+        updateLastProcessedVersion($reconciled);
+
+        return $reconciled;
+    }
+
+    if ($stored > 0 && !aptosTxVersionExistsOnChain($stored)) {
+        $fallback = $maxValid > 0 ? $maxValid : ($ledgerHead ?? 0);
+        logMessage("Cursor {$stored} not on chain; fallback to {$fallback}");
+        updateLastProcessedVersion($fallback);
+
+        return $fallback;
+    }
+
+    if ($stored === 0 && $ledgerHead !== null && trackerRowCount() === 0) {
+        logMessage("Empty tracker; seeding cursor to ledger head {$ledgerHead}");
+        updateLastProcessedVersion($ledgerHead);
+
+        return $ledgerHead;
+    }
+
+    if ($maxValid > 0 && $stored > $maxValid + 50000) {
+        logMessage("Cursor {$stored} ahead of max valid tracked {$maxValid}; aligning");
+        updateLastProcessedVersion($maxValid);
+
+        return $maxValid;
+    }
+
+    return $stored;
 }
 
 // Update last processed version
 function updateLastProcessedVersion($version) {
     $pdo = getDB();
     if (!$pdo) return;
+
+    $version = (int) $version;
+
+    $ledgerHead = aptosMainnetLedgerVersion();
+    if ($ledgerHead !== null && $version > $ledgerHead) {
+        $version = $ledgerHead;
+    }
     
     $stmt = $pdo->prepare("UPDATE aptos_webhook_settings SET last_processed_version = :version WHERE id = 1");
     $stmt->execute(['version' => $version]);

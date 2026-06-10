@@ -235,7 +235,7 @@ final class SendraOneClickService
 
     /**
      * @param array<string, mixed> $quoteResponse decoded JSON from /v0/quote
-     * @return array{correlation_id: ?string, deposit_address: ?string, deposit_memo: ?string, amount_in: ?string, amount_out: ?string, amount_out_formatted: ?string, signature: ?string, raw_quote: array<string, mixed>}
+     * @return array{correlation_id: ?string, deposit_address: ?string, deposit_memo: ?string, amount_in: ?string, amount_out: ?string, amount_out_formatted: ?string, min_amount_in: ?string, min_amount_out: ?string, min_amount_out_formatted: ?string, signature: ?string, raw_quote: array<string, mixed>}
      */
     public static function parseQuoteResponse(array $quoteResponse): array
     {
@@ -306,6 +306,42 @@ final class SendraOneClickService
             }
         }
 
+        $minAmountIn = null;
+        foreach ([$q['minAmountIn'] ?? null, $quoteResponse['minAmountIn'] ?? null] as $cand) {
+            if (is_string($cand) && $cand !== '') {
+                $minAmountIn = $cand;
+                break;
+            }
+            if (is_numeric($cand)) {
+                $minAmountIn = (string) $cand;
+                break;
+            }
+        }
+
+        $minAmountOut = null;
+        foreach ([$q['minAmountOut'] ?? null, $quoteResponse['minAmountOut'] ?? null] as $cand) {
+            if (is_string($cand) && $cand !== '') {
+                $minAmountOut = $cand;
+                break;
+            }
+            if (is_numeric($cand)) {
+                $minAmountOut = (string) $cand;
+                break;
+            }
+        }
+
+        $minAmountOutFormatted = null;
+        foreach ([$q['minAmountOutFormatted'] ?? null, $quoteResponse['minAmountOutFormatted'] ?? null] as $cand) {
+            if (is_string($cand) && $cand !== '') {
+                $minAmountOutFormatted = $cand;
+                break;
+            }
+            if (is_numeric($cand)) {
+                $minAmountOutFormatted = (string) $cand;
+                break;
+            }
+        }
+
         return [
             'correlation_id' => $correlationId !== '' ? $correlationId : null,
             'deposit_address' => $deposit !== '' ? $deposit : null,
@@ -313,6 +349,9 @@ final class SendraOneClickService
             'amount_in' => $amountIn,
             'amount_out' => $amountOut,
             'amount_out_formatted' => $amountOutFormatted,
+            'min_amount_in' => $minAmountIn,
+            'min_amount_out' => $minAmountOut,
+            'min_amount_out_formatted' => $minAmountOutFormatted,
             'signature' => $signature !== '' ? $signature : null,
             'raw_quote' => $quoteResponse,
         ];

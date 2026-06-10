@@ -33,6 +33,9 @@ use App\Models\DeliveryRequest;
 use App\Models\LogisticsDriver;
 use App\Models\LogisticsUser;
 use App\Models\RiderWalletTransaction;
+use App\Models\MarketplaceOrder;
+use App\Services\Marketplace\MarketplaceAfterPaymentService;
+use App\Services\Marketplace\MarketplaceWhatsAppHandler;
 use App\Services\CentiivDirectPayService;
 use App\Services\LogisticsAfterDriverFeePaidService;
 use App\Services\RiderWalletService;
@@ -172,6 +175,12 @@ if ($paymentStatus === 'failed' || str_contains($paymentStatus, 'fail') || str_c
 }
 
 if ($paymentStatus !== 'successful') {
+    http_response_code(200);
+    exit('OK');
+}
+
+$marketplacePaid = centiiv_resolve_marketplace_payment($data, $db, $whatsappService);
+if ($marketplacePaid) {
     http_response_code(200);
     exit('OK');
 }
@@ -401,6 +410,48 @@ function centiiv_resolve_logistics_payment(array $data, DeliveryRequest $deliver
     }
 
     return null;
+}
+
+/**
+ * Marketplace multi-store checkout payment.
+ *
+ * @param array<string, mixed> $data
+ */
+function centiiv_resolve_marketplace_payment(array $data, PDO $db, WhatsAppService $whatsappService): bool
+{
+    $meta = $data['metadata'] ?? [];
+    if (is_object($meta)) {
+        $meta = (array) $meta;
+    }
+    if (!is_array($meta)) {
+        $meta = [];
+    }
+    $resourceId = (string) ($meta['resourceId'] ?? $meta['trackingId'] ?? '');
+    $orderModel = new MarketplaceOrder($db);
+    $order = null;
+    if ($resourceId !== '' && str_starts_with($resourceId, 'MKT_PAY_')) {
+        $order = $orderModel->findByPaymentReference($resourceId);
+    }
+    if ($order === null && $resourceId !== '' && str_starts_with($resourceId, 'DPL-')) {
+        $order = $orderModel->findByCentiivDplId($resourceId);
+    }
+    $note = is_string($data['note'] ?? null) ? $data['note'] : null;
+    $parsedNote = CentiivDirectPayService::parseMarketplaceNote($note);
+    if ($order === null && $parsedNote !== null) {
+        $order = $orderModel->findById((int) $parsedNote['marketplace_order_id']);
+    }
+    if ($order === null) {
+        return false;
+    }
+    if (($order['payment_status'] ?? '') === 'paid') {
+        return true;
+    }
+    $amountMinor = centiiv_amount_to_kobo_from_payment_data($data);
+    $amountNgn = $amountMinor / 100;
+    $ref = (string) ($order['payment_reference'] ?? $resourceId);
+    $handler = MarketplaceWhatsAppHandler::build($db, $whatsappService);
+
+    return $handler->afterPayment()->handlePaid((int) $order['id'], $amountNgn > 0 ? $amountNgn : (float) $order['total_ngn'], $ref);
 }
 
 /**
@@ -841,6 +892,8 @@ function centiiv_handle_sendra_ramp_webhook(array $event, string $accessToken, s
     $eventType = strtolower(trim((string) ($event['event_type'] ?? '')));
     if ($eventType === 'order.created') {
         SendraCentiivRampService::cacheOfframpOrderCreatedFromWebhook($event);
+        SendraCentiivRampService::cacheOnrampOrderCreatedFromWebhook($event);
+        centiiv_sendra_try_notify_buy_bank_on_order_created($event, $accessToken, $aptosPhoneId, $aptosDb);
     }
 
     $wa = new WhatsAppService($accessToken, $aptosPhoneId);
@@ -882,7 +935,7 @@ function centiiv_handle_sendra_ramp_webhook(array $event, string $accessToken, s
                 }
                 $meta = centiiv_sendra_extract_metadata($event);
                 $asset = (string) ($meta['sendra_ledger_asset'] ?? 'USDC');
-                $recv = (string) ($meta['sendra_ledger_amount'] ?? '—');
+                $recv = centiiv_sendra_buy_recv_amount_display($event, $aptosDb, $orderLabel);
                 $msgRes = $wa->sendMessage(
                     $phone,
                     "✅ *Naira payment received*\n\n" .
@@ -1218,6 +1271,58 @@ function centiiv_sendra_event_is_buy(array $event, array $norm): bool
 }
 
 /**
+ * USDC amount to show on buy "Naira payment received" (Centiiv webhook often omits sendra_ledger_amount).
+ *
+ * @param array<string, mixed> $event
+ */
+function centiiv_sendra_buy_recv_amount_display(array $event, \PDO $aptosDb, string $orderLabel): string
+{
+    $data = $event['data'] ?? $event;
+    if (is_object($data)) {
+        $data = (array) $data;
+    }
+    if (!is_array($data)) {
+        return '—';
+    }
+
+    $fulfillments = $data['fulfillments'] ?? null;
+    if (is_array($fulfillments)) {
+        foreach ($fulfillments as $fulfillment) {
+            if (!is_array($fulfillment)) {
+                continue;
+            }
+            $amt = $fulfillment['amount'] ?? null;
+            if ($amt !== null && is_numeric($amt) && (float) $amt > 0) {
+                return (string) $amt;
+            }
+        }
+    }
+
+    $row = centiiv_sendra_find_onramp_pending($aptosDb, $orderLabel);
+    if ($row !== null) {
+        if (isset($row['amount']) && is_numeric($row['amount']) && (float) $row['amount'] > 0) {
+            return (string) $row['amount'];
+        }
+        $pendingMeta = json_decode((string) ($row['human_description'] ?? ''), true);
+        if (is_array($pendingMeta)) {
+            if (!empty($pendingMeta['receive_crypto_display'])) {
+                return (string) $pendingMeta['receive_crypto_display'];
+            }
+            if (!empty($pendingMeta['sendra_ledger_amount'])) {
+                return (string) $pendingMeta['sendra_ledger_amount'];
+            }
+        }
+    }
+
+    $meta = centiiv_sendra_extract_metadata($event);
+    if (!empty($meta['sendra_ledger_amount'])) {
+        return (string) $meta['sendra_ledger_amount'];
+    }
+
+    return '—';
+}
+
+/**
  * When Centiiv sends Stellar USDC to 1Click, notify 1Click with the on-chain tx hash.
  *
  * @param array<string, mixed> $event
@@ -1279,8 +1384,150 @@ function centiiv_sendra_try_submit_buy_oneclick_deposit(array $event, \PDO $apto
 }
 
 /**
- * @return ?array<string, mixed>
+ * When Centiiv creates the buy order before HTTP returns, push virtual bank details over WhatsApp.
+ *
+ * @param array<string, mixed> $event
  */
+function centiiv_sendra_try_notify_buy_bank_on_order_created(
+    array $event,
+    string $accessToken,
+    string $aptosPhoneId,
+    \PDO $aptosDb
+): void {
+    try {
+        $norm = centiiv_sendra_normalize_conversion_event($event);
+        if (!centiiv_sendra_event_is_buy($event, $norm)) {
+            return;
+        }
+
+        $phone = $norm['user_phone'] ?? null;
+        if ($phone === null || $phone === '') {
+            error_log('CENTIIV WEBHOOK sendra buy: skip bank notify — no phone');
+
+            return;
+        }
+
+        $data = $event['data'] ?? $event;
+        if (is_object($data)) {
+            $data = (array) $data;
+        }
+        if (!is_array($data)) {
+            error_log('CENTIIV WEBHOOK sendra buy: skip bank notify — no data');
+
+            return;
+        }
+
+        $orderId = (string) ($data['id'] ?? $norm['order_label'] ?? '');
+        if ($orderId === '') {
+            error_log('CENTIIV WEBHOOK sendra buy: skip bank notify — no order id');
+
+            return;
+        }
+
+        $bank = SendraCentiivRampService::extractVirtualBankAccount($data);
+        if ($bank === null) {
+            error_log('CENTIIV WEBHOOK sendra buy: skip bank notify — no virtual bank on order ' . $orderId);
+
+            return;
+        }
+
+        $stmt = $aptosDb->prepare("
+        SELECT id FROM pending_transactions
+        WHERE tx_type = 'onramp_oneclick_centiiv'
+          AND user_phone = :phone
+          AND (
+            human_description LIKE :like_id
+            OR human_description LIKE :like_id2
+          )
+        LIMIT 1
+    ");
+    $stmt->execute([
+        'phone' => $phone,
+        'like_id' => '%"centiiv_order_id":"' . $orderId . '"%',
+        'like_id2' => '%"centiiv_order_id": "' . $orderId . '"%',
+    ]);
+        if ($stmt->fetch(\PDO::FETCH_ASSOC) !== false) {
+            error_log('CENTIIV WEBHOOK sendra buy: skip bank notify — pending already exists for ' . $orderId);
+
+            return;
+        }
+
+        $desc = (string) ($data['description'] ?? '');
+    $oneclickCorrelation = null;
+    $memo = null;
+    if (preg_match('/\(1Click\s+([0-9a-f-]{36})\)/i', $desc, $m) === 1) {
+        $oneclickCorrelation = $m[1];
+    }
+    if (preg_match('/\bmemo:(\d+)\b/i', $desc, $m) === 1) {
+        $memo = $m[1];
+    }
+    $beneficiary = $data['beneficiary'] ?? null;
+    $stellarDest = is_array($beneficiary) ? (string) ($beneficiary['address'] ?? '') : '';
+
+    $payNgn = (float) ($data['amount'] ?? 0);
+    $meta = [
+        'kind' => 'oneclick_centiiv_onramp',
+        'centiiv_order_id' => $orderId,
+        'pay_ngn' => $payNgn,
+        'pay_ngn_display' => number_format($payNgn, 2, '.', ','),
+        'ledger_asset' => 'USDC',
+        'user_aptos' => null,
+        'sendra_oneclick_correlation_id' => $oneclickCorrelation,
+        'sendra_oneclick_deposit_stellar' => $stellarDest !== '' ? $stellarDest : null,
+        'sendra_oneclick_deposit_memo' => $memo,
+        'need_oneclick_poll' => true,
+        'virtual_bank' => $bank,
+        'bank_notified_via_webhook' => true,
+    ];
+
+    $userStmt = $aptosDb->prepare('SELECT aptos_address FROM users WHERE phone_number = :phone LIMIT 1');
+    $userStmt->execute(['phone' => $phone]);
+    $userRow = $userStmt->fetch(\PDO::FETCH_ASSOC);
+    if (is_array($userRow) && !empty($userRow['aptos_address'])) {
+        $meta['user_aptos'] = (string) $userRow['aptos_address'];
+    }
+
+    $pendingId = bin2hex(random_bytes(16));
+    $ins = $aptosDb->prepare("
+        INSERT INTO pending_transactions
+            (id, user_phone, tx_type, amount, currency, recipient_address, human_description, expires_at, status, created_at)
+        VALUES
+            (:id, :phone, 'onramp_oneclick_centiiv', :amount, 'USDC', :recipient, :meta, DATE_ADD(NOW(), INTERVAL 30 MINUTE), 'pending', NOW())
+    ");
+    $ins->execute([
+        'id' => $pendingId,
+        'phone' => $phone,
+        'amount' => '0',
+        'recipient' => $stellarDest !== '' ? $stellarDest : '',
+        'meta' => json_encode($meta, JSON_UNESCAPED_UNICODE),
+    ]);
+
+    $clearCtx = $aptosDb->prepare("
+        UPDATE users SET chat_context = NULL
+        WHERE phone_number = :phone AND chat_context LIKE '%\"flow\":\"buy\"%'
+    ");
+    $clearCtx->execute(['phone' => $phone]);
+
+    $wa = new WhatsAppService($accessToken, $aptosPhoneId);
+    $payDisplay = number_format($payNgn, 0, '.', ',');
+    $wa->sendMessage(
+        $phone,
+        "🏦 *Pay to complete your buy*\n\n" .
+        "Transfer *exactly ₦{$payDisplay}* to:\n\n" .
+        "*{$bank['account_name']}*\n" .
+        "`{$bank['account_number']}`\n" .
+        "*{$bank['bank_name']}*\n\n" .
+        "Order: `{$orderId}`\n" .
+        "You receive crypto → your Sendra wallet\n\n" .
+        "⏱ Complete payment within *30 minutes*. We’ll notify you when crypto lands."
+    );
+
+        error_log('CENTIIV WEBHOOK sendra buy: bank details sent for order ' . $orderId . ' phone ' . $phone);
+    } catch (\Throwable $e) {
+        error_log('CENTIIV WEBHOOK sendra buy: bank notify failed — ' . $e->getMessage());
+    }
+}
+
 function centiiv_sendra_find_onramp_pending(\PDO $aptosDb, string $orderLabel): ?array
 {
     $orderLabel = trim($orderLabel);
@@ -1291,7 +1538,7 @@ function centiiv_sendra_find_onramp_pending(\PDO $aptosDb, string $orderLabel): 
         SELECT id, user_phone, recipient_address, human_description, status
         FROM pending_transactions
         WHERE tx_type = 'onramp_oneclick_centiiv'
-          AND status IN ('awaiting_payment', 'confirmed')
+          AND status IN ('pending', 'confirmed')
           AND expires_at > NOW()
     ");
     $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);

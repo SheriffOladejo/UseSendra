@@ -11,5 +11,8 @@ const networkMap = {
 };
 const networkName = process.env.APTOS_NETWORK || 'TESTNET';
 const network = networkMap[networkName] ?? ts_sdk_1.Network.TESTNET;
-exports.aptos = new ts_sdk_1.Aptos(new ts_sdk_1.AptosConfig({ network }));
-console.log(`[AptosClient] Connected to ${networkName}`);
+const apiKey = (process.env.APTOS_NODE_API_KEY || '').trim();
+const clientConfig = apiKey !== '' ? { API_KEY: apiKey } : undefined;
+exports.aptos = new ts_sdk_1.Aptos(new ts_sdk_1.AptosConfig({ network, clientConfig }));
+console.log(`[AptosClient] Connected to ${networkName}` +
+    (apiKey !== '' ? ' (fullnode API key set)' : ' (no APTOS_NODE_API_KEY — anonymous rate limits apply)'));

@@ -59,7 +59,9 @@ final class SendraPayoutReceiptImageService
      */
     public static function renderToTempFile(array $model): ?string
     {
-        if (SendraPayoutReceiptHtmlRenderer::isEnabled()) {
+        $isBuy = strtolower(trim((string) ($model['receipt_kind'] ?? ''))) === 'buy';
+
+        if (!$isBuy && SendraPayoutReceiptHtmlRenderer::isEnabled()) {
             $htmlPath = SendraPayoutReceiptHtmlRenderer::renderToTempFile($model);
             if ($htmlPath !== null) {
                 return $htmlPath;
@@ -159,8 +161,13 @@ final class SendraPayoutReceiptImageService
         }
         $yy += $markH + 12;
 
+        $receiptTitle = $isBuy ? 'Buy receipt' : 'Withdrawal receipt';
+        $heroLabel    = $isBuy ? 'You paid:' : 'You withdrew:';
+        $cryptoRowLbl = $isBuy ? 'Crypto received:' : 'Amount (USD):';
+        $recvSection  = $isBuy ? 'Payment account (deposit)' : "Receiver's details";
+
         // ── Title ────────────────────────────────────────────────────────────
-        self::ttfCenter($im, $fontBold, 20, $cBrand, (int) (self::WIDTH / 2), (int) ($yy + 18), 'Withdrawal receipt');
+        self::ttfCenter($im, $fontBold, 20, $cBrand, (int) (self::WIDTH / 2), (int) ($yy + 18), $receiptTitle);
         $yy += 34;
 
         // ── Hero card ────────────────────────────────────────────────────────
@@ -172,7 +179,7 @@ final class SendraPayoutReceiptImageService
         self::filledRoundRect($im, $cardX1, $cardY1, $cardX2, $cardY2, self::HERO_RADIUS, $cBrand);
         self::drawHeroPattern($im, $cardX1, $cardY1, $cardX2, $cardY2, $cPattern);
 
-        self::ttfCenter($im, $font, 12, $cHeroLabel, (int) (self::WIDTH / 2), $cardY1 + 30, 'You withdrew:');
+        self::ttfCenter($im, $font, 12, $cHeroLabel, (int) (self::WIDTH / 2), $cardY1 + 30, $heroLabel);
 
         $heroSize = strlen($amountStr) > 12 ? 34 : 40;
         self::ttfCenter($im, $fontBold, (float) $heroSize, $cWhite, (int) (self::WIDTH / 2), $cardY2 - 22, $amountStr);
@@ -185,7 +192,7 @@ final class SendraPayoutReceiptImageService
 
         $yy = (float) self::kvRowWithIcon(
             $im, $font, $fontBold, $ix, (int) $yy, $iw,
-            'Amount (USD):', $withdrawStr, $cLabel, $cBrand, $cUsdcBlue, $cWhite
+            $cryptoRowLbl, $withdrawStr, $cLabel, $cBrand, $cUsdcBlue, $cWhite
         );
         $yy = (float) self::kvRow(
             $im, $font, $fontBold, $ix, (int) $yy, $iw,
@@ -194,8 +201,8 @@ final class SendraPayoutReceiptImageService
         self::dottedHLine($im, $ix, (int) $yy, $ix + $iw, $cDivider);
         $yy += 24;
 
-        // ── Receiver's details ─────────────────────────────────────────────
-        self::ttf($im, $fontBold, 14, $cHeading, $ix, (int) $yy, "Receiver's details");
+        // ── Bank / payment account ─────────────────────────────────────────
+        self::ttf($im, $fontBold, 14, $cHeading, $ix, (int) $yy, $recvSection);
         $yy += 28;
 
         $bn  = $bankName      !== '' ? $bankName      : '—';
@@ -208,8 +215,11 @@ final class SendraPayoutReceiptImageService
         self::dottedHLine($im, $ix, (int) $yy, $ix + $iw, $cDivider);
         $yy += 24;
 
-        $yy = (float) self::kvRow($im, $font, $fontBold, $ix, (int) $yy, $iw, 'Sender:', $senderName !== '' ? $senderName : 'Nomba Financial Services', $cLabel, $cBrand);
-        $yy = (float) self::kvRowWrapped($im, $font, $fontBold, $ix, (int) $yy, $iw, 'Reference:', $refValue, $cLabel, $cBrand);
+        if (!$isBuy) {
+            $yy = (float) self::kvRow($im, $font, $fontBold, $ix, (int) $yy, $iw, 'Sender:', $senderName !== '' ? $senderName : 'Nomba Financial Services', $cLabel, $cBrand);
+        }
+        $refLabel = $isBuy ? 'Order reference:' : 'Reference:';
+        $yy = (float) self::kvRowWrapped($im, $font, $fontBold, $ix, (int) $yy, $iw, $refLabel, $refValue, $cLabel, $cBrand);
         self::dottedHLine($im, $ix, (int) $yy, $ix + $iw, $cDivider);
         $yy += 24;
 
@@ -228,6 +238,31 @@ final class SendraPayoutReceiptImageService
         imagedestroy($im);
 
         return $path;
+    }
+
+    /**
+     * @param array<string, mixed> $model From {@see SendraCentiivBuyReceiptFactory::buildFromOnrampMeta()}
+     */
+    public static function renderBuyToTempFile(array $model): ?string
+    {
+        if (SendraPayoutReceiptHtmlRenderer::isEnabled()) {
+            $htmlPath = SendraPayoutReceiptHtmlRenderer::renderBuyToTempFile($model);
+            if ($htmlPath !== null) {
+                return $htmlPath;
+            }
+            error_log('SendraPayoutReceiptImageService: buy HTML renderer failed, falling back to GD');
+        }
+
+        $mapped = array_merge($model, [
+            'receipt_kind' => 'buy',
+            'withdraw_asset' => $model['receive_asset'] ?? 'USDC',
+            'withdraw_amount' => $model['receive_amount'] ?? null,
+            'sender_name' => '',
+            'bridge_note' => trim((string) ($model['oneclick_reference'] ?? '')),
+            'session_id' => '',
+        ]);
+
+        return self::renderToTempFile($mapped);
     }
 
     private static function kvRow(

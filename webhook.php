@@ -23,6 +23,7 @@ $botConfigs = require __DIR__ . '/config/Bots.php';
 use App\Controllers\AuthController;
 use App\Controllers\LogisticsAuthController;
 use App\Controllers\MessageController;
+use App\Services\SendraIndexerDepositNotifyService;
 use App\Services\WebhookAuthService;
 use App\Services\WhatsAppInboundFilter;
 use App\Services\WhatsAppService;
@@ -332,29 +333,12 @@ function handleDepositNotification($data, $whatsappService) {
         sendJsonResponse(['success' => false, 'message' => 'No phone number provided'], 400);
     }
 
-    $shortSender = strlen($senderAddress) > 20
-        ? substr($senderAddress, 0, 6) . '...' . substr($senderAddress, -6)
-        : $senderAddress;
-
-    $shortHash = strlen($txHash) > 20
-        ? substr($txHash, 0, 10) . '...' . substr($txHash, -8)
-        : $txHash;
-
-    $suppressWa = $db && WhatsAppInboundFilter::shouldSuppressDepositWhatsAppNotify($db, $phoneNumber, $data);
-    if ($suppressWa) {
-        error_log("DEPOSIT NOTIFY: suppressed WhatsApp during off-ramp phone={$phoneNumber} amount={$amount} {$currency}");
+    if (!$db) {
+        error_log('DEPOSIT NOTIFY: no database connection');
+        sendJsonResponse(['success' => false, 'message' => 'Database unavailable'], 500);
     }
 
-    $message = "*💰 Crypto Deposit Notification*\n\n" .
-               "*Summary:*\nReceived *{$amount} {$currency}* on *{$network}*\n" .
-               "From: `{$shortSender}`\n\n" .
-               "*Transaction Hash:*\n`{$shortHash}`\n\n" .
-               ($explorerUrl ? "*View In Explorer:*\n{$explorerUrl}\n\n" : '') .
-               "✅ Your wallet has been credited successfully!";
-
-    $result = $suppressWa
-        ? ['success' => true, 'suppressed' => true]
-        : $whatsappService->sendMessage($phoneNumber, $message);
+    $result = SendraIndexerDepositNotifyService::handle($db, $whatsappService, $data);
 
     // ── Record deposit in transaction history ─────────────────────────────────
     if ($result['success'] && $db && $txHash !== 'unknown') {

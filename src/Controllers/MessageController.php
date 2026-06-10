@@ -3735,7 +3735,7 @@ class MessageController
                 'bank_name' => $ctx['bank_name'] ?? '',
                 'need_oneclick_poll' => false,
             ], JSON_UNESCAPED_UNICODE),
-            'expires_at' => gmdate('Y-m-d H:i:s', time() + 30 * 60),
+            'expires_at' => date('Y-m-d H:i:s', time() + 30 * 60),
         ]);
 
         $this->userModel->setPendingTransaction($from, $pendingId);
@@ -4072,7 +4072,7 @@ class MessageController
                 'centiiv_order_id_hex' => $orderIdHex,
                 'need_oneclick_poll' => false,
             ], JSON_UNESCAPED_UNICODE),
-            'expires_at' => gmdate('Y-m-d H:i:s', $expiresAt),
+            'expires_at' => date('Y-m-d H:i:s', $expiresAt),
         ]);
 
         $this->userModel->setPendingTransaction($from, $pendingId);
@@ -4216,7 +4216,7 @@ class MessageController
                 'account_number' => $acct,
                 'bank_name' => $ctx['bank_name'] ?? '',
             ], JSON_UNESCAPED_UNICODE),
-            'expires_at' => gmdate('Y-m-d H:i:s', time() + 30 * 60),
+            'expires_at' => date('Y-m-d H:i:s', time() + 30 * 60),
         ]);
 
         $this->userModel->setPendingTransaction($from, $pendingId);
@@ -5075,6 +5075,10 @@ class MessageController
             return $this->buyApplyQuoteAndPrompt($from, $userRow, (float) ($ctx['pay_ngn'] ?? 0), $asset, $buySvc);
         }
 
+        if ($step === 'await_opening_order') {
+            return $this->buyHandleOpeningOrderStep($from, $userRow, $ctx, $buySvc, $messageLower);
+        }
+
         if ($step === 'await_quote_confirm') {
             if ($this->buyMessageMeansYes($message, $messageLower)) {
                 return $this->buyCreateOrderAndSendBankDetails($from, $userRow, $ctx, $buySvc);
@@ -5370,11 +5374,57 @@ class MessageController
      */
     private function buyCreateOrderAndSendBankDetails($from, $userRow, array $ctx, \App\Services\SendraBuyRampService $buySvc)
     {
-        $this->whatsappService->sendMessage($from, '⏳ Opening your payment account…');
-        $created = $buySvc->createBuyOrder($from, (string) ($userRow['aptos_address'] ?? ''), $ctx);
+        $lockDir = dirname(__DIR__, 2) . '/var/sendra_buy_opening';
+        if (!is_dir($lockDir)) {
+            @mkdir($lockDir, 0775, true);
+        }
+        $lockPath = $lockDir . '/' . preg_replace('/\D+/', '', $from) . '.lock';
+        $lockFp = @fopen($lockPath, 'c');
+        $hasLock = is_resource($lockFp) && flock($lockFp, LOCK_EX | LOCK_NB);
+        if (!$hasLock && is_resource($lockFp)) {
+            fclose($lockFp);
+            $lockFp = null;
+
+            return $this->buyTryDeliverBankOrSayBusy($from, $userRow, $ctx, $buySvc);
+        }
+        if (!$hasLock) {
+            error_log('Sendra buy: lock file unavailable for ' . $from . ' at ' . $lockPath . ' — proceeding without dedup');
+            $lockFp = null;
+        }
+
+        try {
+            $fresh = $this->userModel->findByPhone($from) ?: $userRow;
+            $liveCtx = $this->getBuyChatContext($fresh) ?? $ctx;
+            $liveCtx['step'] = 'await_opening_order';
+            $liveCtx['opening_started_at'] = time();
+            $this->setBuyChatContext($from, $liveCtx);
+
+            $this->whatsappService->sendMessage($from, '⏳ Opening your payment account…');
+            $created = $buySvc->createBuyOrder($from, (string) ($fresh['aptos_address'] ?? $userRow['aptos_address'] ?? ''), $liveCtx);
+
+            if (!$created['success']) {
+            $cachedOrder = \App\Services\SendraCentiivRampService::pullRecentOnrampOrderCreatedForPhone($from);
+            if ($cachedOrder !== null) {
+                $bank = \App\Services\SendraCentiivRampService::extractVirtualBankAccount($cachedOrder);
+                $orderId = \App\Services\SendraCentiivRampService::extractOrderId($cachedOrder);
+                if ($orderId !== null && $orderId !== '') {
+                    error_log("Sendra buy: using order.created webhook cache for {$from} order={$orderId}");
+                    $created = [
+                        'success' => true,
+                        'error' => null,
+                        'centiiv_order_id' => $orderId,
+                        'bank' => $bank,
+                        'meta' => $this->buyMetaFromCentiivOrderPayload($cachedOrder, $liveCtx, $from, (string) ($fresh['aptos_address'] ?? '')),
+                    ];
+                }
+            }
+        }
+
         if (!$created['success']) {
             $err = (string) ($created['error'] ?? 'order_failed');
             error_log("Sendra buy create order failed {$from}: {$err}");
+            $liveCtx['step'] = 'await_quote_confirm';
+            $this->setBuyChatContext($from, $liveCtx);
             $this->whatsappService->sendMessage(
                 $from,
                 "❌ Could not open a buy order.\n({$err})\n\nTry again or contact support@usesendra.com"
@@ -5387,6 +5437,16 @@ class MessageController
         $meta = $created['meta'];
         $orderId = (string) ($created['centiiv_order_id'] ?? '');
 
+        if ($this->findOnrampPendingByCentiivOrderId($orderId) !== null) {
+            $this->clearBuyChatContext($from);
+            $this->whatsappService->sendMessage(
+                $from,
+                "✅ Your buy order is already open.\nOrder: `{$orderId}`\n\nCheck messages above for bank details, or type *menu*."
+            );
+
+            return ['success' => true, 'action' => 'buy_order_already_open'];
+        }
+
         $this->storeOnrampOrder([
             'user_phone' => $from,
             'tx_type' => 'onramp_oneclick_centiiv',
@@ -5394,7 +5454,6 @@ class MessageController
             'currency' => (string) ($ctx['asset'] ?? 'USDC'),
             'recipient_address' => (string) ($meta['sendra_oneclick_deposit_stellar'] ?? $userRow['aptos_address'] ?? ''),
             'human_description' => json_encode($meta, JSON_UNESCAPED_UNICODE),
-            'expires_at' => gmdate('Y-m-d H:i:s', time() + 30 * 60),
         ]);
 
         $this->clearBuyChatContext($from);
@@ -5428,7 +5487,266 @@ class MessageController
             "⏱ Complete payment within *30 minutes*. We’ll notify you when crypto lands."
         );
 
-        return ['success' => true, 'action' => 'buy_bank_sent'];
+            return ['success' => true, 'action' => 'buy_bank_sent'];
+        } finally {
+            if (is_resource($lockFp)) {
+                flock($lockFp, LOCK_UN);
+                fclose($lockFp);
+            }
+        }
+    }
+
+    /**
+     * User is stuck on await_opening_order (duplicate webhook, lock race, or slow Centiiv).
+     *
+     * @param array<string, mixed> $ctx
+     * @return array<string, mixed>
+     */
+    private function buyHandleOpeningOrderStep($from, $userRow, array $ctx, \App\Services\SendraBuyRampService $buySvc, string $messageLower)
+    {
+        $delivered = $this->buyTryDeliverBankFromCacheOrPending($from, $ctx);
+        if ($delivered) {
+            return ['success' => true, 'action' => 'buy_bank_delivered_resume'];
+        }
+
+        $startedAt = (int) ($ctx['opening_started_at'] ?? 0);
+        $staleSeconds = max(45, (int) ($_ENV['SENDRA_BUY_OPENING_STALE_SECONDS'] ?? getenv('SENDRA_BUY_OPENING_STALE_SECONDS') ?: 90));
+        if ($startedAt > 0 && time() - $startedAt < $staleSeconds) {
+            $this->whatsappService->sendMessage(
+                $from,
+                "⏳ Still opening your payment account…\n\nThis usually takes under a minute. We’ll send bank details here shortly."
+            );
+
+            return ['success' => false, 'action' => 'buy_opening_processing'];
+        }
+
+        if ($this->buyMessageMeansYes($messageLower, $messageLower) || $startedAt === 0 || time() - $startedAt >= $staleSeconds) {
+            $ctx['step'] = 'await_quote_confirm';
+            unset($ctx['opening_started_at']);
+            $this->setBuyChatContext($from, $ctx);
+            if ($startedAt > 0 && time() - $startedAt >= $staleSeconds) {
+                error_log("Sendra buy: reopening stale order for {$from} after " . (time() - $startedAt) . 's');
+            }
+
+            return $this->buyCreateOrderAndSendBankDetails($from, $userRow, $ctx, $buySvc);
+        }
+
+        $this->whatsappService->sendMessage(
+            $from,
+            "⏳ Your buy is still being set up.\n\nTap *Yes* again in a moment, or type *cancel* to start over."
+        );
+
+        return ['success' => false, 'action' => 'buy_opening_processing'];
+    }
+
+    /**
+     * Another request is opening the order — deliver bank if webhook already created it.
+     *
+     * @param array<string, mixed> $ctx
+     * @return array<string, mixed>
+     */
+    private function buyTryDeliverBankOrSayBusy($from, $userRow, array $ctx, \App\Services\SendraBuyRampService $buySvc)
+    {
+        if ($this->buyTryDeliverBankFromCacheOrPending($from, $ctx)) {
+            return ['success' => true, 'action' => 'buy_bank_delivered_parallel'];
+        }
+
+        $this->whatsappService->sendMessage(
+            $from,
+            "⏳ Still opening your payment account…\n\nHang on — bank details will arrive in this chat shortly."
+        );
+
+        return ['success' => false, 'action' => 'buy_opening_processing'];
+    }
+
+    /**
+     * @param array<string, mixed> $ctx
+     */
+    private function buyTryDeliverBankFromCacheOrPending(string $from, array $ctx): bool
+    {
+        $pending = $this->findLatestOpenOnrampPendingForPhone($from);
+        if ($pending !== null) {
+            return $this->buySendBankFromPendingRow($from, $pending, $ctx);
+        }
+
+        $cachedOrder = \App\Services\SendraCentiivRampService::pullRecentOnrampOrderCreatedForPhone($from, 900);
+        if ($cachedOrder === null) {
+            return false;
+        }
+
+        $bank = \App\Services\SendraCentiivRampService::extractVirtualBankAccount($cachedOrder);
+        $orderId = \App\Services\SendraCentiivRampService::extractOrderId($cachedOrder);
+        if ($orderId === null || $orderId === '' || $bank === null) {
+            return false;
+        }
+
+        if ($this->findOnrampPendingByCentiivOrderId($orderId) !== null) {
+            $this->clearBuyChatContext($from);
+            $this->whatsappService->sendMessage(
+                $from,
+                "✅ Your buy order is already open.\nOrder: `{$orderId}`\n\nCheck messages above for bank details, or type *menu*."
+            );
+
+            return true;
+        }
+
+        $fresh = $this->userModel->findByPhone($from);
+        $aptos = is_array($fresh) ? (string) ($fresh['aptos_address'] ?? '') : '';
+        $meta = $this->buyMetaFromCentiivOrderPayload($cachedOrder, $ctx, $from, $aptos);
+        $this->storeOnrampOrder([
+            'user_phone' => $from,
+            'tx_type' => 'onramp_oneclick_centiiv',
+            'amount' => (string) ($ctx['receive_crypto_display'] ?? ''),
+            'currency' => (string) ($ctx['asset'] ?? 'USDC'),
+            'recipient_address' => (string) ($meta['sendra_oneclick_deposit_stellar'] ?? $aptos),
+            'human_description' => json_encode($meta, JSON_UNESCAPED_UNICODE),
+        ]);
+        $this->clearBuyChatContext($from);
+
+        $payDisplay = number_format((float) ($ctx['pay_ngn'] ?? $meta['pay_ngn'] ?? 0), 0, '.', ',');
+        $recv = (string) ($ctx['receive_crypto_display'] ?? '—');
+        $asset = (string) ($ctx['asset'] ?? 'USDC');
+        $this->whatsappService->sendMessage(
+            $from,
+            "🏦 *Pay to complete your buy*\n\n" .
+            "Transfer *exactly ₦{$payDisplay}* to:\n\n" .
+            "*{$bank['account_name']}*\n" .
+            "`{$bank['account_number']}`\n" .
+            "*{$bank['bank_name']}*\n\n" .
+            "Order: `{$orderId}`\n" .
+            "You receive: *≈ {$recv} {$asset}* → your Sendra wallet\n\n" .
+            "⏱ Complete payment within *30 minutes*. We’ll notify you when crypto lands."
+        );
+        error_log("Sendra buy: delivered bank from webhook cache for {$from} order={$orderId}");
+
+        return true;
+    }
+
+    /**
+     * @param array<string, mixed> $row pending_transactions row
+     */
+    private function buySendBankFromPendingRow(string $from, array $row, array $ctx): bool
+    {
+        $metaRaw = $row['human_description'] ?? '';
+        $meta = is_string($metaRaw) ? json_decode($metaRaw, true) : [];
+        if (!is_array($meta)) {
+            $meta = [];
+        }
+        $bank = $meta['virtual_bank'] ?? null;
+        if (!is_array($bank)) {
+            $bank = \App\Services\SendraCentiivRampService::extractVirtualBankAccount($meta);
+        }
+        $orderId = (string) ($meta['centiiv_order_id'] ?? '');
+        if ($orderId === '' || !is_array($bank)) {
+            return false;
+        }
+
+        $bank['bank_name'] = \App\Services\SendraCentiivRampService::displayVirtualBankName(
+            (string) ($bank['bank_name'] ?? ''),
+            isset($bank['bank_code']) ? (string) $bank['bank_code'] : null
+        );
+
+        $this->clearBuyChatContext($from);
+        $payDisplay = number_format((float) ($ctx['pay_ngn'] ?? $meta['pay_ngn'] ?? 0), 0, '.', ',');
+        $recv = (string) ($ctx['receive_crypto_display'] ?? $meta['receive_crypto_display'] ?? '—');
+        $asset = (string) ($ctx['asset'] ?? $meta['ledger_asset'] ?? 'USDC');
+        $this->whatsappService->sendMessage(
+            $from,
+            "🏦 *Pay to complete your buy*\n\n" .
+            "Transfer *exactly ₦{$payDisplay}* to:\n\n" .
+            "*{$bank['account_name']}*\n" .
+            "`{$bank['account_number']}`\n" .
+            "*{$bank['bank_name']}*\n\n" .
+            "Order: `{$orderId}`\n" .
+            "You receive: *≈ {$recv} {$asset}* → your Sendra wallet\n\n" .
+            "⏱ Complete payment within *30 minutes*. We’ll notify you when crypto lands."
+        );
+
+        return true;
+    }
+
+    /**
+     * @return ?array<string, mixed>
+     */
+    private function findLatestOpenOnrampPendingForPhone(string $phone): ?array
+    {
+        if (!$this->db) {
+            return null;
+        }
+        $stmt = $this->db->prepare("
+            SELECT id, user_phone, human_description, status, created_at
+            FROM pending_transactions
+            WHERE user_phone = :phone
+              AND tx_type = 'onramp_oneclick_centiiv'
+              AND status IN ('pending', 'confirmed')
+              AND expires_at > NOW()
+            ORDER BY created_at DESC
+            LIMIT 1
+        ");
+        $stmt->execute(['phone' => $phone]);
+        $row = $stmt->fetch(\PDO::FETCH_ASSOC);
+
+        return $row !== false ? $row : null;
+    }
+
+    /**
+     * @param array<string, mixed> $centiivOrder Centiiv order.created / create-order payload
+     * @param array<string, mixed> $ctx buy chat context
+     * @return array<string, mixed>
+     */
+    private function buyMetaFromCentiivOrderPayload(array $centiivOrder, array $ctx, string $waPhone, string $aptosAddress): array
+    {
+        $desc = (string) ($centiivOrder['description'] ?? '');
+        $oneclickCorrelation = null;
+        $memo = null;
+        if (preg_match('/\(1Click\s+([0-9a-f-]{36})\)/i', $desc, $m) === 1) {
+            $oneclickCorrelation = $m[1];
+        }
+        if (preg_match('/\bmemo:(\d+)\b/i', $desc, $m) === 1) {
+            $memo = $m[1];
+        }
+
+        $beneficiary = $centiivOrder['beneficiary'] ?? null;
+        $stellarDest = is_array($beneficiary) ? (string) ($beneficiary['address'] ?? '') : '';
+
+        return [
+            'kind' => 'oneclick_centiiv_onramp',
+            'centiiv_order_id' => \App\Services\SendraCentiivRampService::extractOrderId($centiivOrder),
+            'centiiv_order_id_hex' => \App\Services\SendraCentiivRampService::extractOrderIdHex($centiivOrder),
+            'pay_ngn' => (float) ($centiivOrder['amount'] ?? $ctx['pay_ngn'] ?? 0),
+            'pay_ngn_display' => number_format((float) ($centiivOrder['amount'] ?? $ctx['pay_ngn'] ?? 0), 2, '.', ','),
+            'ledger_asset' => (string) ($ctx['asset'] ?? 'USDC'),
+            'receive_crypto_display' => (string) ($ctx['receive_crypto_display'] ?? ''),
+            'user_aptos' => $aptosAddress,
+            'sendra_oneclick_correlation_id' => $oneclickCorrelation,
+            'sendra_oneclick_deposit_stellar' => $stellarDest !== '' ? $stellarDest : null,
+            'sendra_oneclick_deposit_memo' => $memo,
+            'need_oneclick_poll' => (new \App\Services\SendraBuyRampService())->isOneClickBridgeConfigured(),
+            'virtual_bank' => \App\Services\SendraCentiivRampService::extractVirtualBankAccount($centiivOrder),
+        ];
+    }
+
+    private function findOnrampPendingByCentiivOrderId(string $orderId): ?array
+    {
+        if ($orderId === '' || !$this->db) {
+            return null;
+        }
+        $stmt = $this->db->prepare("
+            SELECT id FROM pending_transactions
+            WHERE tx_type = 'onramp_oneclick_centiiv'
+              AND (
+                human_description LIKE :like_id
+                OR human_description LIKE :like_id2
+              )
+            LIMIT 1
+        ");
+        $stmt->execute([
+            'like_id' => '%"centiiv_order_id":"' . $orderId . '"%',
+            'like_id2' => '%"centiiv_order_id": "' . $orderId . '"%',
+        ]);
+        $row = $stmt->fetch(\PDO::FETCH_ASSOC);
+
+        return $row !== false ? $row : null;
     }
 
     /**
@@ -5437,11 +5755,12 @@ class MessageController
     private function storeOnrampOrder(array $data): string
     {
         $id = bin2hex(random_bytes(16));
+        unset($data['expires_at']);
         $stmt = $this->db->prepare("
             INSERT INTO pending_transactions
                 (id, user_phone, tx_type, amount, currency, recipient_address, human_description, expires_at, status, created_at)
             VALUES
-                (:id, :user_phone, :tx_type, :amount, :currency, :recipient_address, :human_description, :expires_at, 'awaiting_payment', NOW())
+                (:id, :user_phone, :tx_type, :amount, :currency, :recipient_address, :human_description, DATE_ADD(NOW(), INTERVAL 30 MINUTE), 'pending', NOW())
         ");
         $stmt->execute(array_merge(['id' => $id], $data));
 

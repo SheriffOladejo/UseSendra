@@ -11,6 +11,12 @@ const networkMap: Record<string, Network> = {
 const networkName = process.env.APTOS_NETWORK || 'TESTNET';
 const network = networkMap[networkName] ?? Network.TESTNET;
 
-export const aptos = new Aptos(new AptosConfig({ network }));
+const apiKey = (process.env.APTOS_NODE_API_KEY || '').trim();
+const clientConfig = apiKey !== '' ? { API_KEY: apiKey } : undefined;
 
-console.log(`[AptosClient] Connected to ${networkName}`);
+export const aptos = new Aptos(new AptosConfig({ network, clientConfig }));
+
+console.log(
+  `[AptosClient] Connected to ${networkName}` +
+    (apiKey !== '' ? ' (fullnode API key set)' : ' (no APTOS_NODE_API_KEY — anonymous rate limits apply)')
+);

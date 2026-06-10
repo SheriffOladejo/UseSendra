@@ -15,6 +15,12 @@ namespace App\Services;
  */
 final class SendraCentiivRampService
 {
+    /** Centiiv/VA provider still returns legacy name; show correct institution to users. */
+    private const CENTIIV_VA_BANK_DISPLAY_OVERRIDES = [
+        'amucha mfb' => 'Nombank Microfinance Bank',
+        'amucha' => 'Nombank Microfinance Bank',
+    ];
+
     private string $token;
 
     private string $baseUrl;
@@ -123,7 +129,13 @@ final class SendraCentiivRampService
             }
             if ($this->isRetryableCentiivTransportError($last) && $waPhone !== '') {
                 usleep(2500000);
-                $cached = self::pullRecentOfframpOrderCreatedForPhone($waPhone);
+                $meta = is_array($merged['metadata'] ?? null) ? $merged['metadata'] : [];
+                $isOnramp = ($meta['sendra_ramp_kind'] ?? '') === 'buy'
+                    || (strtoupper((string) ($merged['fromAsset'] ?? '')) === 'NGN'
+                        && strtoupper((string) ($merged['toAsset'] ?? '')) !== 'NGN');
+                $cached = $isOnramp
+                    ? self::pullRecentOnrampOrderCreatedForPhone($waPhone)
+                    : self::pullRecentOfframpOrderCreatedForPhone($waPhone);
                 if ($cached !== null) {
                     error_log('Sendra Centiiv: using order.created webhook after POST /public/order timeout for ' . $waPhone);
 
@@ -141,6 +153,59 @@ final class SendraCentiivRampService
             }
             error_log(
                 'Sendra Centiiv ramp POST /public/order transport retry '
+                . $attempt . '/' . $maxAttempts . ': ' . ($last['error'] ?? 'unknown')
+            );
+            usleep(1500000 * $attempt);
+        }
+
+        return $last ?? $this->notConfigured();
+    }
+
+    /**
+     * NGN on-ramp with Stellar destination + memo (1Click). Uses POST /requests — accepts destinationMemo*;
+     * POST /public/order rejects those fields on many keys.
+     *
+     * @param array<string, mixed> $body
+     * @return array{success: bool, http_code: int, data: array<string, mixed>, raw: ?string, error: ?string}
+     */
+    public function createOnrampRequest(array $body): array
+    {
+        if (!$this->isConfigured()) {
+            return $this->notConfigured();
+        }
+
+        $merged = $this->mergeRoutingHints($body);
+        $meta = is_array($merged['metadata'] ?? null) ? $merged['metadata'] : [];
+        $waPhone = trim((string) ($meta['user_phone'] ?? ''));
+        $maxAttempts = max(1, min(4, (int) ($_ENV['SENDRA_CENTIIV_ORDER_RETRIES'] ?? getenv('SENDRA_CENTIIV_ORDER_RETRIES') ?: 3)));
+        $timeout = max(30, min(120, (int) ($_ENV['SENDRA_CENTIIV_ORDER_TIMEOUT'] ?? getenv('SENDRA_CENTIIV_ORDER_TIMEOUT') ?: 60)));
+
+        $last = null;
+        for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
+            $last = $this->postJson('/requests', $merged, $timeout);
+            if (!empty($last['success'])) {
+                return $last;
+            }
+            if ($this->isRetryableCentiivTransportError($last) && $waPhone !== '') {
+                usleep(2500000);
+                $cached = self::pullRecentOnrampOrderCreatedForPhone($waPhone);
+                if ($cached !== null) {
+                    error_log('Sendra Centiiv: using order.created webhook after POST /requests timeout for ' . $waPhone);
+
+                    return [
+                        'success' => true,
+                        'http_code' => 200,
+                        'data' => $cached,
+                        'raw' => null,
+                        'error' => null,
+                    ];
+                }
+            }
+            if (!$this->isRetryableCentiivTransportError($last) || $attempt >= $maxAttempts) {
+                return $last;
+            }
+            error_log(
+                'Sendra Centiiv ramp POST /requests transport retry '
                 . $attempt . '/' . $maxAttempts . ': ' . ($last['error'] ?? 'unknown')
             );
             usleep(1500000 * $attempt);
@@ -183,6 +248,40 @@ final class SendraCentiivRampService
     }
 
     /**
+     * Cache ONRAMP order.created for buy timeout recovery and webhook bank notify.
+     *
+     * @param array<string, mixed> $event full webhook envelope
+     */
+    public static function cacheOnrampOrderCreatedFromWebhook(array $event): void
+    {
+        $data = $event['data'] ?? null;
+        if (!is_array($data)) {
+            return;
+        }
+        if (strtoupper((string) ($data['type'] ?? '')) !== 'ONRAMP') {
+            return;
+        }
+        $phone = null;
+        $desc = $data['description'] ?? null;
+        if (is_string($desc) && preg_match('/\bSendra\s+WhatsApp\s+buy\s+(\d{10,20})\b/i', $desc, $m) === 1) {
+            $phone = $m[1];
+        }
+        if ($phone === null || $phone === '') {
+            return;
+        }
+        $dir = dirname(__DIR__, 2) . '/var/sendra_centiiv_pending_orders';
+        if (!is_dir($dir)) {
+            @mkdir($dir, 0775, true);
+        }
+        $payload = [
+            'cached_at' => time(),
+            'order' => $data,
+            'kind' => 'onramp',
+        ];
+        @file_put_contents($dir . '/' . preg_replace('/\D+/', '', $phone) . '.json', json_encode($payload, JSON_UNESCAPED_UNICODE));
+    }
+
+    /**
      * @return ?array<string, mixed> Centiiv order payload (same shape as create-order response data)
      */
     public static function pullRecentOfframpOrderCreatedForPhone(string $waPhone, int $maxAgeSeconds = 180): ?array
@@ -201,6 +300,46 @@ final class SendraCentiivRampService
         }
         $decoded = json_decode($raw, true);
         if (!is_array($decoded) || !is_array($decoded['order'] ?? null)) {
+            return null;
+        }
+        if (($decoded['kind'] ?? '') === 'onramp'
+            || strtoupper((string) ($decoded['order']['type'] ?? '')) === 'ONRAMP') {
+            return null;
+        }
+        $cachedAt = (int) ($decoded['cached_at'] ?? 0);
+        if ($cachedAt <= 0 || time() - $cachedAt > $maxAgeSeconds) {
+            @unlink($path);
+
+            return null;
+        }
+        @unlink($path);
+
+        return $decoded['order'];
+    }
+
+    /**
+     * @return ?array<string, mixed> Centiiv ONRAMP order from a recent order.created webhook
+     */
+    public static function pullRecentOnrampOrderCreatedForPhone(string $waPhone, int $maxAgeSeconds = 180): ?array
+    {
+        $phone = preg_replace('/\D+/', '', $waPhone);
+        if ($phone === '') {
+            return null;
+        }
+        $path = dirname(__DIR__, 2) . '/var/sendra_centiiv_pending_orders/' . $phone . '.json';
+        if (!is_readable($path)) {
+            return null;
+        }
+        $raw = @file_get_contents($path);
+        if ($raw === false) {
+            return null;
+        }
+        $decoded = json_decode($raw, true);
+        if (!is_array($decoded) || !is_array($decoded['order'] ?? null)) {
+            return null;
+        }
+        if (($decoded['kind'] ?? '') !== 'onramp'
+            && strtoupper((string) ($decoded['order']['type'] ?? '')) !== 'ONRAMP') {
             return null;
         }
         $cachedAt = (int) ($decoded['cached_at'] ?? 0);
@@ -1068,9 +1207,38 @@ final class SendraCentiivRampService
         return [
             'account_number' => $acct,
             'account_name' => $name !== '' ? $name : 'Sendra / Centiiv',
-            'bank_name' => $bank !== '' ? $bank : 'Virtual account',
+            'bank_name' => self::displayVirtualBankName($bank !== '' ? $bank : 'Virtual account', $code),
             'bank_code' => $code,
         ];
+    }
+
+    /**
+     * User-facing bank label for Centiiv virtual accounts (API may lag provider rebrand).
+     */
+    public static function displayVirtualBankName(string $bankName, ?string $bankCode = null): string
+    {
+        $trimmed = trim($bankName);
+        if ($trimmed === '') {
+            return 'Virtual account';
+        }
+
+        $key = strtolower(preg_replace('/\s+/', ' ', $trimmed) ?? $trimmed);
+        if (isset(self::CENTIIV_VA_BANK_DISPLAY_OVERRIDES[$key])) {
+            return self::CENTIIV_VA_BANK_DISPLAY_OVERRIDES[$key];
+        }
+
+        foreach (self::CENTIIV_VA_BANK_DISPLAY_OVERRIDES as $needle => $label) {
+            if (str_contains($key, $needle)) {
+                return $label;
+            }
+        }
+
+        // Amucha MFB virtual accounts (Centiiv bankCode 090645) → Nombank rebrand
+        if ($bankCode === '090645' || str_contains($key, 'amucha')) {
+            return 'Nombank Microfinance Bank';
+        }
+
+        return $trimmed;
     }
 
     /**
@@ -1095,6 +1263,23 @@ final class SendraCentiivRampService
 
         $hash = $meta['depositTxHash'] ?? $meta['deposit_tx_hash'] ?? $meta['payoutTxHash'] ?? null;
         $sender = $meta['depositSenderAddress'] ?? $meta['deposit_sender_address'] ?? null;
+
+        if (!is_string($hash) || $hash === '') {
+            $fulfillments = $data['fulfillments'] ?? null;
+            if (is_array($fulfillments)) {
+                foreach ($fulfillments as $fulfillment) {
+                    if (!is_array($fulfillment)) {
+                        continue;
+                    }
+                    $hash = $fulfillment['disbursalTxHash'] ?? $fulfillment['disbursal_tx_hash'] ?? null;
+                    if (is_string($hash) && $hash !== '') {
+                        $sender = $fulfillment['walletAddress'] ?? $fulfillment['wallet_address'] ?? $sender;
+
+                        break;
+                    }
+                }
+            }
+        }
 
         if (!is_string($hash) || $hash === '') {
             foreach ($data as $k => $v) {

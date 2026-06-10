@@ -37,6 +37,8 @@ class DeliveryRequest
             // Merge with defaults to avoid missing placeholders
             $data = array_merge([
                 'user_id' => null,
+                'marketplace_order_id' => null,
+                'store_order_id' => null,
                 'pickup_address' => null,
                 'pickup_lat' => null,
                 'pickup_lng' => null,
@@ -56,13 +58,15 @@ class DeliveryRequest
 
             $sql = "
                 INSERT INTO {$this->table} (
-                    user_id, pickup_address, pickup_lat, pickup_lng,
+                    user_id, marketplace_order_id, store_order_id,
+                    pickup_address, pickup_lat, pickup_lng,
                     dropoff_address, dropoff_lat, dropoff_lng,
                     item_name, item_description, item_photo_url,
                     sender_phone, receiver_phone, vehicle_type,
                     offered_price, payer, payment_method, created_at
                 ) VALUES (
-                    :user_id, :pickup_address, :pickup_lat, :pickup_lng,
+                    :user_id, :marketplace_order_id, :store_order_id,
+                    :pickup_address, :pickup_lat, :pickup_lng,
                     :dropoff_address, :dropoff_lat, :dropoff_lng,
                     :item_name, :item_description, :item_photo_url,
                     :sender_phone, :receiver_phone, :vehicle_type,

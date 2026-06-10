@@ -57,6 +57,8 @@ final class WhatsAppInboundFilter
             'summary:',
             'received *',
             'on *aptos*',
+            'crypto received',
+            'is in your sendra wallet',
         ];
 
         foreach ($needles as $needle) {

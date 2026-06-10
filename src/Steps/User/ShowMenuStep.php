@@ -16,6 +16,17 @@ class ShowMenuStep extends BaseStep
         $choice = $this->normalizeInput($message);
 
         switch ($choice) {
+            case 'shop':
+            case 'buy':
+                $this->nextStep($phone, 'shop_menu');
+                return "🛍️ *Sendra Shop*\n\n"
+                    . "• *browse* — stores\n"
+                    . "• *cart* — multi-store cart\n"
+                    . "• *checkout* — pay online\n"
+                    . "• *orders* — your purchases\n"
+                    . "• *sell* — open a store\n"
+                    . "• *send* — delivery only";
+
             case 'send':
             case '📦':
                 // Create a new draft request (short flow starts with pickup pin)
@@ -71,6 +82,7 @@ class ShowMenuStep extends BaseStep
         $choice = $this->normalizeInput($message);
 
         $validChoices = [
+            'shop', 'buy',
             'send', '📦',
             'order', 'track', '📍',
             'help', 'support', '❓',
@@ -89,6 +101,7 @@ class ShowMenuStep extends BaseStep
     private function getMenuText(): string
     {
         return "I can help you send packages fast, right here on WhatsApp. What would you like to do?\n\n" .
+               "- 🛍️ To shop (multi-store) — type *shop*\n" .
                "- 📦 To send a package — type *send*\n" .
                "- 📍 To track your order — type *order*\n" .
                "- ❓ To get help/support — type *help*\n" .

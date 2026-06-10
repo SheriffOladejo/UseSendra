@@ -143,6 +143,48 @@ class NoditIndexerDepositService
     }
 
     /**
+     * Deposits with ledger version below $belowVersion but within recent time window.
+     * Catches credits missed when the global cursor jumped ahead (invalid/high watermark).
+     *
+     * @param list<string> $ownerAddresses
+     * @return list<array<string, mixed>>|null
+     */
+    public function fetchDepositsBelowCursorRecent(
+        array $ownerAddresses,
+        int $belowVersion,
+        int $lookbackSeconds = 86400,
+        int $limit = 100
+    ): ?array {
+        if ($belowVersion <= 0 || !$this->isConfigured()) {
+            return [];
+        }
+
+        $owners = array_values(array_unique(array_filter(array_map(
+            fn ($a) => $this->addressForIndexer($a),
+            $ownerAddresses
+        ))));
+
+        if ($owners === []) {
+            return [];
+        }
+
+        $assetTypes = array_keys($this->assetMap());
+        $all = [];
+
+        foreach (array_chunk($owners, 25) as $chunk) {
+            $batch = $this->graphqlDepositsBelowVersionRecent($chunk, $assetTypes, $belowVersion, $limit);
+            if ($batch === null) {
+                return null;
+            }
+            $all = array_merge($all, $batch);
+        }
+
+        usort($all, fn ($a, $b) => (int) $a['transaction_version'] <=> (int) $b['transaction_version']);
+
+        return $this->enrichActivitiesWithTransactionMeta($all);
+    }
+
+    /**
      * Attach sender + transaction hash (GraphQL has sender; hash via REST).
      *
      * @param list<array<string, mixed>> $activities
@@ -245,7 +287,7 @@ GRAPHQL;
     /**
      * @return array<string, mixed>|null
      */
-    private function graphqlRequest(string $payload): ?array
+    private function graphqlRequest(string $payload, int $timeoutSeconds = 45): ?array
     {
         $ch = curl_init($this->graphqlUrl);
         curl_setopt_array($ch, [
@@ -253,7 +295,7 @@ GRAPHQL;
             CURLOPT_POSTFIELDS => $payload,
             CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT => 45,
+            CURLOPT_TIMEOUT => max(10, $timeoutSeconds),
         ]);
         $raw = curl_exec($ch);
         $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -320,6 +362,63 @@ GRAPHQL;
         $data = $this->graphqlRequest($payload);
         if ($data === null) {
             $this->lastError = 'GraphQL request failed';
+
+            return null;
+        }
+        if (!empty($data['errors'])) {
+            $this->lastError = json_encode($data['errors']);
+
+            return null;
+        }
+
+        return $data['data']['fungible_asset_activities'] ?? [];
+    }
+
+    /**
+     * @param list<string> $owners
+     * @param list<string> $assetTypes
+     * @return list<array<string, mixed>>|null
+     */
+    private function graphqlDepositsBelowVersionRecent(
+        array $owners,
+        array $assetTypes,
+        int $belowVersion,
+        int $limit
+    ): ?array {
+        $query = <<<'GRAPHQL'
+query SendraDepositsLookback($where: fungible_asset_activities_bool_exp, $limit: Int!) {
+  fungible_asset_activities(
+    limit: $limit
+    order_by: { transaction_version: desc }
+    where: $where
+  ) {
+    amount
+    asset_type
+    transaction_version
+    transaction_timestamp
+    owner_address
+    type
+    is_transaction_success
+  }
+}
+GRAPHQL;
+
+        $where = [
+            'asset_type' => ['_in' => $assetTypes],
+            'type' => ['_eq' => self::DEPOSIT_TYPE],
+            'is_transaction_success' => ['_eq' => true],
+            'owner_address' => ['_in' => $owners],
+            'transaction_version' => ['_lt' => (string) $belowVersion],
+        ];
+
+        $payload = json_encode([
+            'query' => $query,
+            'variables' => ['where' => $where, 'limit' => $limit],
+        ]);
+
+        $data = $this->graphqlRequest($payload, 90);
+        if ($data === null) {
+            $this->lastError = 'GraphQL lookback request failed';
 
             return null;
         }

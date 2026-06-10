@@ -12,6 +12,8 @@ final class SendraPayoutReceiptHtmlRenderer
 {
     private const TEMPLATE = 'templates/receipts/payout.html';
 
+    private const TEMPLATE_BUY = 'templates/receipts/buy.html';
+
     /** Receipt width (px); capture at 2× then downscale for smooth rounded corners. */
     private const OUTPUT_WIDTH = 432;
 
@@ -40,6 +42,37 @@ final class SendraPayoutReceiptHtmlRenderer
         $html = self::fillTemplate(file_get_contents($templatePath) ?: '', self::viewModel($model, $root));
         $htmlPath = sys_get_temp_dir() . '/sendra_receipt_' . bin2hex(random_bytes(8)) . '.html';
         $pngPath  = sys_get_temp_dir() . '/sendra_receipt_' . bin2hex(random_bytes(8)) . '.png';
+        if (file_put_contents($htmlPath, $html) === false) {
+            return null;
+        }
+
+        $ok = self::screenshotHtml($htmlPath, $pngPath);
+        @unlink($htmlPath);
+        if (!$ok || !is_readable($pngPath)) {
+            @unlink($pngPath);
+
+            return null;
+        }
+
+        return $pngPath;
+    }
+
+    /**
+     * @param array<string, mixed> $model From {@see SendraCentiivBuyReceiptFactory::buildFromOnrampMeta()}
+     */
+    public static function renderBuyToTempFile(array $model): ?string
+    {
+        $root = dirname(__DIR__, 2);
+        $templatePath = $root . '/' . self::TEMPLATE_BUY;
+        if (!is_readable($templatePath)) {
+            error_log('SendraPayoutReceiptHtmlRenderer: buy template missing at ' . $templatePath);
+
+            return null;
+        }
+
+        $html = self::fillTemplate(file_get_contents($templatePath) ?: '', self::viewModelBuy($model, $root));
+        $htmlPath = sys_get_temp_dir() . '/sendra_buy_receipt_' . bin2hex(random_bytes(8)) . '.html';
+        $pngPath  = sys_get_temp_dir() . '/sendra_buy_receipt_' . bin2hex(random_bytes(8)) . '.png';
         if (file_put_contents($htmlPath, $html) === false) {
             return null;
         }
@@ -113,6 +146,57 @@ final class SendraPayoutReceiptHtmlRenderer
             'display_reference'=> self::e($ref),
             'bank_remark_row'  => $bankRemarkRow,
             'completed_at'     => self::e(trim((string) ($model['completed_at'] ?? SendraCentiivPayoutReceiptFactory::formatReceiptNow('M d, Y g:i A')))),
+        ];
+    }
+
+    /**
+     * @param array<string, mixed> $model
+     * @return array<string, string>
+     */
+    private static function viewModelBuy(array $model, string $root): array
+    {
+        $asset = strtoupper(trim((string) ($model['receive_asset'] ?? 'USDC')));
+        $amt = $model['amount_ngn'] ?? null;
+        $amountNgn = is_numeric($amt)
+            ? '₦ ' . number_format((float) $amt, abs((float) $amt - round((float) $amt)) < 0.005 ? 0 : 2, '.', ',')
+            : '—';
+
+        $recv = $model['receive_amount'] ?? null;
+        $recvStr = is_numeric($recv)
+            ? self::formatCrypto((float) $recv, $asset)
+            : ('— ' . $asset);
+
+        $rate = trim((string) ($model['conversion_rate'] ?? ''));
+        if ($rate === '' && is_numeric($recv) && is_numeric($amt) && (float) $recv > 0) {
+            $rate = '₦' . number_format((float) $amt / (float) $recv, 2, '.', ',');
+        }
+
+        $oneclick = trim((string) ($model['oneclick_reference'] ?? ''));
+        $oneclickRow = '';
+        if ($oneclick !== '') {
+            $oneclickRow = '<div class="row"><span class="k">1Click ref:</span><span class="v">'
+                . self::e($oneclick) . '</span></div>';
+        }
+
+        $fontRegular = self::fontFile($root, 'Inter-Regular.ttf');
+        $fontBold    = self::fontFile($root, 'Inter-Bold.ttf');
+        $logoPath    = $root . '/assets/images/sendra-logo.png';
+
+        return [
+            'logo_uri'          => is_readable($logoPath) ? self::fileUri($logoPath) : '',
+            'font_regular_uri'  => $fontRegular !== null ? self::fileUri($fontRegular) : '',
+            'font_bold_uri'     => $fontBold !== null ? self::fileUri($fontBold) : '',
+            'amount_ngn'        => self::e($amountNgn),
+            'receive_amount'    => self::e($recvStr),
+            'conversion_rate'   => self::e($rate !== '' ? $rate : '—'),
+            'payment_method'    => self::e(trim((string) ($model['payment_method'] ?? 'Bank transfer'))),
+            'bank_name'         => self::e(self::upper(trim((string) ($model['bank_name'] ?? '—')))),
+            'account_name'      => self::e(self::upper(trim((string) ($model['account_name'] ?? '—')))),
+            'account_number'    => self::e(trim((string) ($model['account_number'] ?? '—'))),
+            'display_reference' => self::e(trim((string) ($model['display_reference'] ?? '—'))),
+            'oneclick_row'      => $oneclickRow,
+            'completed_at'      => self::e(trim((string) ($model['completed_at'] ?? SendraCentiivPayoutReceiptFactory::formatReceiptNow('M d, Y g:i A')))),
+            'status_label'      => self::e(trim((string) ($model['status_label'] ?? 'Successful'))),
         ];
     }
 

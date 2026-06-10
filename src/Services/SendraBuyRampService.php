@@ -91,8 +91,9 @@ final class SendraBuyRampService
         }
 
         $stellarOutDecimals = (int) ($_ENV['SENDRA_ONECLICK_STELLAR_USDC_DECIMALS'] ?? getenv('SENDRA_ONECLICK_STELLAR_USDC_DECIMALS') ?: 7);
+        $oneClickStellarUsdc = $this->centiivUsdcForOneClickQuote($centiivUsdc);
         $stellarUsdcSmallest = SendraOneClickService::cryptoAmountToSmallestUnits(
-            rtrim(rtrim(number_format($centiivUsdc, 6, '.', ''), '0'), '.'),
+            rtrim(rtrim(number_format($oneClickStellarUsdc, 6, '.', ''), '0'), '.'),
             $stellarOutDecimals
         );
 
@@ -100,6 +101,7 @@ final class SendraBuyRampService
         $originStellar = $this->stellarUsdcAssetId();
         $refundStellar = $this->stellarRefundAddress();
         $deadlineIso = gmdate('Y-m-d\TH:i:s\Z', time() + 50 * 60);
+        $buySwapType = $this->buyOneClickSwapType();
 
         $dryBody = SendraOneClickService::buildStellarToAptosQuoteBody(
             $originStellar,
@@ -109,7 +111,8 @@ final class SendraBuyRampService
             $refundStellar,
             $deadlineIso,
             true,
-            SendraOneClickService::resolveSearchQuoteWaitMs()
+            SendraOneClickService::resolveSearchQuoteWaitMs(),
+            $buySwapType
         );
         $dryRes = $this->oneClick->requestQuote($dryBody);
         if (!$dryRes['success']) {
@@ -174,12 +177,14 @@ final class SendraBuyRampService
             }
 
             $stellarOutDecimals = (int) ($_ENV['SENDRA_ONECLICK_STELLAR_USDC_DECIMALS'] ?? getenv('SENDRA_ONECLICK_STELLAR_USDC_DECIMALS') ?: 7);
+            $oneClickStellarUsdc = $this->centiivUsdcForOneClickQuote($centiivUsdc);
             $stellarUsdcSmallest = SendraOneClickService::cryptoAmountToSmallestUnits(
-                rtrim(rtrim(number_format($centiivUsdc, 6, '.', ''), '0'), '.'),
+                rtrim(rtrim(number_format($oneClickStellarUsdc, 6, '.', ''), '0'), '.'),
                 $stellarOutDecimals
             );
             $deadlineIso = gmdate('Y-m-d\TH:i:s\Z', time() + 50 * 60);
 
+            $buySwapType = $this->buyOneClickSwapType();
             $liveBody = SendraOneClickService::buildStellarToAptosQuoteBody(
                 $this->stellarUsdcAssetId(),
                 $this->aptosAssetId($asset),
@@ -187,7 +192,9 @@ final class SendraBuyRampService
                 $aptosAddress,
                 $this->stellarRefundAddress(),
                 $deadlineIso,
-                false
+                false,
+                null,
+                $buySwapType
             );
             $liveRes = $this->oneClick->requestQuote($liveBody);
             if (!$liveRes['success']) {
@@ -210,20 +217,36 @@ final class SendraBuyRampService
                 return ['success' => false, 'error' => 'oneclick_memo_required', 'centiiv_order_id' => null, 'bank' => null, 'meta' => []];
             }
             $oneclickCorrelation = $parsedLive['correlation_id'];
+            $stellarDecimals = (int) ($_ENV['SENDRA_ONECLICK_STELLAR_USDC_DECIMALS'] ?? getenv('SENDRA_ONECLICK_STELLAR_USDC_DECIMALS') ?: 7);
+            $aptosDecimals = (int) ($_ENV['SENDRA_ONECLICK_APTOS_USDC_DECIMALS'] ?? getenv('SENDRA_ONECLICK_APTOS_USDC_DECIMALS') ?: 6);
+            $minStellarDisplay = self::formatSmallestUnitsAsCrypto($parsedLive['min_amount_in'], $stellarDecimals);
+            $minRecvDisplay = $parsedLive['min_amount_out_formatted']
+                ?? self::formatSmallestUnitsAsCrypto($parsedLive['min_amount_out'], $aptosDecimals);
             $oneclickMeta = [
                 'sendra_oneclick_correlation_id' => $oneclickCorrelation,
                 'sendra_oneclick_deposit_stellar' => $destinationStellar,
                 'sendra_oneclick_deposit_memo' => $destinationMemo,
+                'sendra_oneclick_swap_type' => $buySwapType,
                 'sendra_oneclick_receive_display' => $parsedLive['amount_out_formatted'],
+                'sendra_oneclick_min_receive_display' => $minRecvDisplay,
+                'sendra_oneclick_min_stellar_display' => $minStellarDisplay,
                 'sendra_oneclick_quote_signature' => $parsedLive['signature'],
             ];
+        }
+
+        $description = 'Sendra WhatsApp buy ' . $waPhone;
+        if ($oneclickCorrelation !== null) {
+            $description .= ' (1Click ' . $oneclickCorrelation . ')';
+        }
+        if ($destinationMemo !== null && $destinationMemo !== '') {
+            $description .= ' memo:' . $destinationMemo;
         }
 
         $body = [
             'fromAsset' => 'NGN',
             'toAsset' => 'USDC',
             'amount' => $payNgn,
-            'description' => 'Sendra WhatsApp buy ' . $waPhone . ($oneclickCorrelation !== null ? ' (1Click ' . $oneclickCorrelation . ')' : ''),
+            'description' => $description,
             'metadata' => array_merge([
                 'user_phone' => $waPhone,
                 'source' => 'sendra_whatsapp',
@@ -235,29 +258,40 @@ final class SendraBuyRampService
             ], $oneclickMeta),
         ];
 
+        $useRequestsApi = $this->centiivBuyUsesRequestsEndpoint();
         if ($destinationStellar !== null && SendraCentiivRampService::looksLikeStellarAccountId($destinationStellar)) {
             $body['destinationAddress'] = $destinationStellar;
             if ($destinationMemo !== null && $destinationMemo !== '') {
-                $body['destinationMemo'] = $destinationMemo;
-                $body['destinationMemoType'] = trim((string) (
-                    $_ENV['SENDRA_CENTIIV_DESTINATION_MEMO_TYPE']
-                    ?? getenv('SENDRA_CENTIIV_DESTINATION_MEMO_TYPE')
-                    ?: 'id'
-                ));
+                if ($useRequestsApi) {
+                    $body['destinationMemo'] = $destinationMemo;
+                    $body['destinationMemoType'] = $this->centiivDestinationMemoType();
+                    $body['network'] = 'STELLAR';
+                    $body['sender'] = [
+                        'externalId' => SendraCentiivRampService::beneficiaryExternalIdFromWaPhone($waPhone),
+                        'fullName' => trim((string) ($ctx['user_display_name'] ?? '')) !== ''
+                            ? (string) $ctx['user_display_name']
+                            : ('Sendra ' . $waPhone),
+                    ];
+                }
             }
         } elseif (!$this->isOneClickBridgeConfigured()) {
             $body['destinationAddress'] = $aptosAddress;
         }
 
-        $webhookUrlOverride = trim((string) ($_ENV['SENDRA_CENTIIV_WEBHOOK_URL'] ?? getenv('SENDRA_CENTIIV_WEBHOOK_URL') ?: ''));
-        if ($webhookUrlOverride !== '') {
-            $body['webhookUrl'] = $webhookUrlOverride;
-        } elseif ($publicBase !== '') {
-            $path = trim((string) ($_ENV['SENDRA_CENTIIV_WEBHOOK_PATH'] ?? getenv('SENDRA_CENTIIV_WEBHOOK_PATH') ?: 'CentiivWebhook.php'), '/');
-            $body['webhookUrl'] = rtrim($publicBase, '/') . '/' . $path;
+        // POST /requests rejects webhookUrl; rely on Centiiv dashboard webhook for buy. /public/order still accepts it.
+        if (!$useRequestsApi) {
+            $webhookUrlOverride = trim((string) ($_ENV['SENDRA_CENTIIV_WEBHOOK_URL'] ?? getenv('SENDRA_CENTIIV_WEBHOOK_URL') ?: ''));
+            if ($webhookUrlOverride !== '') {
+                $body['webhookUrl'] = $webhookUrlOverride;
+            } elseif ($publicBase !== '') {
+                $path = trim((string) ($_ENV['SENDRA_CENTIIV_WEBHOOK_PATH'] ?? getenv('SENDRA_CENTIIV_WEBHOOK_PATH') ?: 'CentiivWebhook.php'), '/');
+                $body['webhookUrl'] = rtrim($publicBase, '/') . '/' . $path;
+            }
         }
 
-        $created = $this->centiiv->createConversionOrder($body);
+        $created = $useRequestsApi && $this->isOneClickBridgeConfigured()
+            ? $this->centiiv->createOnrampRequest($body)
+            : $this->centiiv->createConversionOrder($body);
         if (!$created['success']) {
             return [
                 'success' => false,
@@ -271,13 +305,25 @@ final class SendraBuyRampService
         $data = is_array($created['data']) ? $created['data'] : [];
         $orderId = SendraCentiivRampService::extractOrderId($data);
         $bank = SendraCentiivRampService::extractVirtualBankAccount($data);
+        if ($bank === null && $orderId !== null && $orderId !== '') {
+            $fetched = $this->centiiv->getRequest($orderId);
+            if (!empty($fetched['success']) && is_array($fetched['data'] ?? null)) {
+                $full = $fetched['data'];
+                if (isset($full['data']) && is_array($full['data'])) {
+                    $full = $full['data'];
+                }
+                $bank = SendraCentiivRampService::extractVirtualBankAccount($full);
+            }
+        }
 
         $meta = array_merge($oneclickMeta, [
             'kind' => 'oneclick_centiiv_onramp',
             'centiiv_order_id' => $orderId,
             'centiiv_order_id_hex' => SendraCentiivRampService::extractOrderIdHex($data),
             'centiiv_destination_memo' => $destinationMemo,
-            'centiiv_destination_memo_type' => $body['destinationMemoType'] ?? null,
+            'centiiv_destination_memo_type' => ($destinationMemo !== null && $destinationMemo !== '' && $useRequestsApi)
+                ? $this->centiivDestinationMemoType() : null,
+            'centiiv_create_path' => ($useRequestsApi && $this->isOneClickBridgeConfigured()) ? '/requests' : '/public/order',
             'pay_ngn' => $payNgn,
             'pay_ngn_display' => number_format($payNgn, 2, '.', ','),
             'ledger_asset' => $asset,
@@ -294,6 +340,81 @@ final class SendraBuyRampService
             'bank' => $bank,
             'meta' => $meta,
         ];
+    }
+
+    /**
+     * Size 1Click quotes below Centiiv estimate so FLEX_INPUT minAmountIn stays under actual payout.
+     */
+    private function centiivUsdcForOneClickQuote(float $centiivUsdc): float
+    {
+        if ($centiivUsdc <= 0) {
+            return 0.0;
+        }
+        $bps = (int) ($_ENV['SENDRA_BUY_ONECLICK_STELLAR_HAIRCUT_BPS'] ?? getenv('SENDRA_BUY_ONECLICK_STELLAR_HAIRCUT_BPS') ?: 200);
+        $bps = max(0, min(1000, $bps));
+
+        return $centiivUsdc * (10000 - $bps) / 10000;
+    }
+
+    /**
+     * 1Click swap mode for buy (Stellar → Aptos). FLEX_INPUT accepts Centiiv payout within minAmountIn band.
+     */
+    private function buyOneClickSwapType(): string
+    {
+        $t = strtoupper(trim((string) (
+            $_ENV['SENDRA_BUY_ONECLICK_SWAP_TYPE']
+            ?? getenv('SENDRA_BUY_ONECLICK_SWAP_TYPE')
+            ?: 'FLEX_INPUT'
+        )));
+        if (!in_array($t, ['FLEX_INPUT', 'EXACT_INPUT', 'EXACT_OUTPUT'], true)) {
+            return 'FLEX_INPUT';
+        }
+
+        return $t;
+    }
+
+    /**
+     * @param ?string $smallest smallest-unit amount string from 1Click quote
+     */
+    private static function formatSmallestUnitsAsCrypto(?string $smallest, int $decimals): ?string
+    {
+        if ($smallest === null || $smallest === '' || !ctype_digit($smallest)) {
+            return null;
+        }
+        if ($decimals <= 0) {
+            return $smallest;
+        }
+        $scale = (string) (10 ** min(18, $decimals));
+        if (function_exists('bcdiv')) {
+            $s = bcdiv($smallest, $scale, $decimals);
+        } else {
+            $s = number_format(((float) $smallest) / (float) $scale, $decimals, '.', '');
+        }
+
+        return rtrim(rtrim($s, '0'), '.') ?: '0';
+    }
+
+    /**
+     * Buy with 1Click uses POST /requests (memo fields). Set SENDRA_CENTIIV_BUY_USE_REQUESTS=0 to fall back to /public/order.
+     */
+    private function centiivBuyUsesRequestsEndpoint(): bool
+    {
+        $flag = strtolower(trim((string) (
+            $_ENV['SENDRA_CENTIIV_BUY_USE_REQUESTS']
+            ?? getenv('SENDRA_CENTIIV_BUY_USE_REQUESTS')
+            ?: '1'
+        )));
+
+        return !in_array($flag, ['0', 'false', 'off', 'no'], true);
+    }
+
+    private function centiivDestinationMemoType(): string
+    {
+        return trim((string) (
+            $_ENV['SENDRA_CENTIIV_DESTINATION_MEMO_TYPE']
+            ?? getenv('SENDRA_CENTIIV_DESTINATION_MEMO_TYPE')
+            ?: 'id'
+        ));
     }
 
     private function stellarUsdcAssetId(): string

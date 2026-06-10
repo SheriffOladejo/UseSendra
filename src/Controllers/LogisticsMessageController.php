@@ -26,6 +26,10 @@ use App\Services\LogisticsDriverWalletAssignmentService;
 use App\Services\RiderWalletWhatsAppHandler;
 use App\Services\RiderWalletService;
 use App\Models\RiderWalletTransaction;
+use App\Services\Marketplace\MarketplaceWhatsAppHandler;
+use App\Services\Marketplace\MarketplaceOrderCompletionService;
+use App\Models\MarketplaceOrder;
+use App\Models\StoreOrder;
 
 class LogisticsMessageController
 {
@@ -398,6 +402,11 @@ class LogisticsMessageController
                     return;
                 }
             }
+        }
+
+        $marketplaceHandler = MarketplaceWhatsAppHandler::build($this->db, $this->whatsappService);
+        if ($marketplaceHandler->tryHandle($phoneNumber, $messageLower, $rawTrim, $session)) {
+            return;
         }
 
         if (str_starts_with($messageLower, 'reject_')) {
@@ -914,12 +923,18 @@ class LogisticsMessageController
         ]);
         $sessionModel->updateStep($driver['phone'], 'awaiting_dropoff_pin');
 
-        $this->whatsappService->sendMessage(
-            $driver['phone'],
-            "✅ Pickup confirmed for #{$parsedRequestId}. Head to dropoff.\n\n"
+        $riderMsg = "✅ Pickup confirmed for #{$parsedRequestId}. Head to dropoff.\n\n"
             . "🔢 When the *receiver tells you the 4-digit code in person*, type *only those digits* here (e.g. 0000).\n\n"
-            . '📍 If the sender asks for your location, you’ll get a separate prompt to share a map pin.'
-        );
+            . '📍 If the sender asks for your location, you’ll get a separate prompt to share a map pin.';
+        if (!empty($req['store_order_id'])) {
+            $riderMsg .= "\n\nIf the *receiver is unavailable*, tap the button we send next.";
+            $this->whatsappService->sendButtonMessage(
+                $driver['phone'],
+                'Marketplace delivery — receiver not available?',
+                ['receiver_unavailable_' . $parsedRequestId => '❌ Receiver unavailable']
+            );
+        }
+        $this->whatsappService->sendMessage($driver['phone'], $riderMsg);
     }
 
     private function finalizeDropoffFromMatchedCode(
@@ -934,6 +949,14 @@ class LogisticsMessageController
             'dropoff_confirmed_at' => date('Y-m-d H:i:s'),
             'status'               => 'delivered',
         ]);
+
+        if (!empty($req['store_order_id'])) {
+            (new MarketplaceOrderCompletionService(
+                new StoreOrder($deliveryRequestModel->getDb()),
+                new MarketplaceOrder($deliveryRequestModel->getDb()),
+                $this->whatsappService
+            ))->onDeliveryRequestDelivered($rid);
+        }
 
         $sender = $userModel->findById((int) $req['user_id']);
         $driver   = $driverModel->findById((int) ($req['reserved_driver_id'] ?? 0));

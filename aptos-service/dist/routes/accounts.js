@@ -50,6 +50,35 @@ router.post('/create', async (req, res) => {
         res.status(500).json({ success: false, error: e.message });
     }
 });
+const BALANCE_CACHE_MS = 8000;
+const balanceCache = new Map();
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+function isRetryableAptosError(err) {
+    const msg = String(err?.message ?? err);
+    return /429|rate limit|too many requests|timeout|timed out|ECONNRESET|503|502|504/i.test(msg);
+}
+async function viewFaBalance(accountAddress, metadataAddress) {
+    const payload = {
+        function: '0x1::primary_fungible_store::balance',
+        typeArguments: ['0x1::fungible_asset::Metadata'],
+        functionArguments: [accountAddress, metadataAddress],
+    };
+    for (let attempt = 0; attempt < 4; attempt++) {
+        try {
+            const result = await aptosClient_js_1.aptos.view({ payload });
+            return Number(result[0] ?? 0);
+        }
+        catch (err) {
+            const msg = String(err?.message ?? err);
+            if (!isRetryableAptosError(err) || attempt >= 3) {
+                console.error(`[accounts/balance] view failed (${metadataAddress.slice(0, 12)}…): ${msg}`);
+                return null;
+            }
+            await sleep(250 * Math.pow(2, attempt));
+        }
+    }
+    return null;
+}
 // ─── POST /accounts/balance ───────────────────────────────────────────────────
 /**
  * Returns APT, USDC, and USDT balances for a given address.
@@ -71,6 +100,22 @@ router.post('/balance', async (req, res) => {
         });
         return;
     }
+    const cacheKey = String(aptos_address).toLowerCase();
+    const cached = balanceCache.get(cacheKey);
+    if (cached && Date.now() - cached.at < BALANCE_CACHE_MS) {
+        res.json({
+            success: true,
+            address: aptos_address,
+            balances: {
+                APT: (cached.aptRaw / 1e8).toFixed(8),
+                USDC: (cached.usdcRaw / 1e6).toFixed(6),
+                USDT: (cached.usdtRaw / 1e6).toFixed(6),
+            },
+            raw: { APT: cached.aptRaw, USDC: cached.usdcRaw, USDT: cached.usdtRaw },
+            cached: true,
+        });
+        return;
+    }
     try {
         // APT balance
         let aptRaw = 0;
@@ -84,26 +129,17 @@ router.post('/balance', async (req, res) => {
         catch {
             // Account not yet on-chain — balance is 0
         }
-        // Fungible asset balances (USDC / USDT)
-        const getFaBalance = async (metadataAddress) => {
-            try {
-                const result = await aptosClient_js_1.aptos.view({
-                    payload: {
-                        function: '0x1::primary_fungible_store::balance',
-                        typeArguments: ['0x1::fungible_asset::Metadata'],
-                        functionArguments: [aptos_address, metadataAddress],
-                    },
-                });
-                return Number(result[0] ?? 0);
-            }
-            catch {
-                return 0;
-            }
-        };
-        const [usdcRaw, usdtRaw] = await Promise.all([
-            getFaBalance(usdcMeta),
-            getFaBalance(usdtMeta),
-        ]);
+        // Sequential reads reduce burst load on the public fullnode (parallel calls often trigger 429).
+        const usdcRaw = await viewFaBalance(aptos_address, usdcMeta);
+        const usdtRaw = await viewFaBalance(aptos_address, usdtMeta);
+        if (usdcRaw === null || usdtRaw === null) {
+            res.status(503).json({
+                success: false,
+                error: 'Balance temporarily unavailable (Aptos node rate limit). Please try again in a few seconds.',
+            });
+            return;
+        }
+        balanceCache.set(cacheKey, { at: Date.now(), aptRaw, usdcRaw, usdtRaw });
         res.json({
             success: true,
             address: aptos_address,
