@@ -53,22 +53,33 @@ $norm = [
 ];
 
 require_once dirname(__DIR__, 2) . '/CentiivWebhook.php';
-require dirname(__DIR__, 2) . '/config/Database.php';
+require_once dirname(__DIR__, 2) . '/config/Database.php';
 
 $storedRef = null;
+$receiptEvent = $event;
 try {
     $bots = require dirname(__DIR__, 2) . '/config/Bots.php';
     $phoneId = (string) ($_ENV['WHATSAPP_APTOS_PHONE_NUMBER_ID'] ?? '851265871413834');
-    $cfg = $bots[$phoneId]['db_config']['live'] ?? null;
+    $cfg = $bots[$phoneId]['db_config'] ?? null;
     if (is_array($cfg)) {
-        $db = Database::getInstance($cfg);
-        $storedRef = centiiv_sendra_lookup_payout_reference($db, $orderId);
+        $aptosDb = Database::getInstance($cfg, false)->getConnection();
+        $storedRef = centiiv_sendra_lookup_payout_reference($aptosDb, $orderId);
+        $ledgerPatch = centiiv_sendra_merge_ledger_meta_from_pending($aptosDb, $orderId);
+        if ($ledgerPatch !== []) {
+            $receiptEvent = centiiv_sendra_patch_event_metadata($event, $ledgerPatch);
+            if (!empty($ledgerPatch['sendra_ledger_asset'])) {
+                $norm['ledger_asset'] = $ledgerPatch['sendra_ledger_asset'];
+            }
+            if (!empty($ledgerPatch['sendra_ledger_amount'])) {
+                $norm['ledger_amount'] = $ledgerPatch['sendra_ledger_amount'];
+            }
+        }
     }
 } catch (\Throwable $e) {
     fwrite(STDERR, 'payout ref lookup: ' . $e->getMessage() . "\n");
 }
 
-$model = SendraCentiivPayoutReceiptFactory::build($event, $norm, $storedRef);
+$model = SendraCentiivPayoutReceiptFactory::build($receiptEvent, $norm, $storedRef);
 $path = SendraPayoutReceiptImageService::renderToTempFile($model);
 if ($path === null) {
     fwrite(STDERR, "Failed to render receipt image.\n");

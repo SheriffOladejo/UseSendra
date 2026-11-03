@@ -9,8 +9,17 @@ namespace App\Services;
  */
 final class SendraCentiivPayoutReceiptFactory
 {
-    /** Default sender line on payout receipts when API/env do not specify a provider. */
-    private const DEFAULT_SENDER_NAME = 'Nomba Financial Services';
+    /** Send-naira (intermediary pool) bank sender on receipts. */
+    private const INTERMEDIARY_SENDER_NAME = 'UseSendra LTD/Centiiv';
+
+    /** Centiiv crypto sell off-ramp (direct to user bank) sender when API omits lp/sender. */
+    private const OFFRAMP_SENDER_NAME = 'UseSendra LTD/Centiiv';
+
+    /** Daya crypto sell off-ramp sender when Daya payload omits provider/sender. */
+    private const DAYA_OFFRAMP_SENDER_NAME = 'UseSendra LTD/Daya';
+
+    /** Centiiv dashboard transaction fee — 0.5% of crypto received at Centiiv. */
+    private const DEFAULT_CENTIIV_FEE_BPS = 50;
     /**
      * Centiiv sends UTC (`…Z`). Receipts default to Africa/Lagos (WAT, UTC+1). Override with SENDRA_RECEIPT_TIMEZONE.
      */
@@ -39,6 +48,350 @@ final class SendraCentiivPayoutReceiptFactory
     }
 
     /**
+     * User-requested wallet debit for receipts (e.g. 2 USDT), not Centiiv's post-1Click USDC amount.
+     *
+     * @param array<string, mixed> $meta pending_transactions.human_description and/or Centiiv metadata
+     * @param ?string $pendingAmount pending_transactions.amount
+     * @param ?string $pendingCurrency pending_transactions.currency
+     * @return array{asset: string, amount: ?float}
+     */
+    public static function resolveUserSellLedger(
+        array $meta,
+        ?string $pendingAmount = null,
+        ?string $pendingCurrency = null
+    ): array {
+        $sellCtx = is_array($meta['sell_ctx'] ?? null) ? $meta['sell_ctx'] : [];
+
+        $asset = strtoupper(trim((string) (self::firstNonEmptyString([
+            is_string($meta['sendra_ledger_asset'] ?? null) ? (string) $meta['sendra_ledger_asset'] : null,
+            is_string($sellCtx['asset'] ?? null) ? (string) $sellCtx['asset'] : null,
+            $pendingCurrency,
+        ]) ?? 'USDT')));
+
+        $amtRaw = self::firstNonEmptyString([
+            is_string($meta['sendra_ledger_amount'] ?? null) ? (string) $meta['sendra_ledger_amount'] : null,
+            is_string($sellCtx['crypto_amount'] ?? null) ? (string) $sellCtx['crypto_amount'] : null,
+            $pendingAmount,
+        ]);
+
+        return [
+            'asset' => $asset !== '' ? $asset : 'USDT',
+            'amount' => is_numeric($amtRaw ?? null) ? (float) $amtRaw : null,
+        ];
+    }
+
+    /**
+     * Wallet debit shown on receipts: the user-requested USDT/USDC, not the Centiiv order USDC
+     * amount after a 1Click bridge haircut.
+     *
+     * @param array<string, mixed> $meta
+     * @param array<string, mixed> $merged
+     * @param array<string, mixed> $norm
+     * @return array{0: string, 1: ?float}
+     */
+    private static function resolveLedgerWithdrawFields(array $meta, array $merged, array $norm): array
+    {
+        $fromNorm = self::resolveUserSellLedger([
+            'sendra_ledger_asset' => $norm['ledger_asset'] ?? null,
+            'sendra_ledger_amount' => $norm['ledger_amount'] ?? null,
+        ]);
+        if ($fromNorm['amount'] !== null) {
+            return [$fromNorm['asset'], $fromNorm['amount']];
+        }
+
+        $fromMeta = self::resolveUserSellLedger($meta);
+        if ($fromMeta['amount'] !== null) {
+            return [$fromMeta['asset'], $fromMeta['amount']];
+        }
+
+        return [$fromMeta['asset'], null];
+    }
+
+    /** Transaction-fee row on payout receipts (on by default). Set SENDRA_RECEIPT_SHOW_TRANSACTION_FEE=0 to hide. */
+    public static function showTransactionFeeOnReceipt(): bool
+    {
+        $raw = $_ENV['SENDRA_RECEIPT_SHOW_TRANSACTION_FEE'] ?? getenv('SENDRA_RECEIPT_SHOW_TRANSACTION_FEE');
+        if ($raw === false || $raw === null || (is_string($raw) && trim($raw) === '')) {
+            return true;
+        }
+        $v = is_string($raw) ? strtolower(trim($raw)) : '';
+
+        if (in_array($v, ['0', 'false', 'no', 'off'], true)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    public static function centiivTransactionFeeBps(): int
+    {
+        $bps = (int) ($_ENV['SENDRA_CENTIIV_TRANSACTION_FEE_BPS'] ?? getenv('SENDRA_CENTIIV_TRANSACTION_FEE_BPS') ?: self::DEFAULT_CENTIIV_FEE_BPS);
+
+        return max(0, min(1000, $bps));
+    }
+
+    /**
+     * Crypto amount that actually reached Centiiv (not the user-requested wallet debit).
+     *
+     * @param array<string, mixed> $meta
+     * @param array<string, mixed> $merged
+     * @return array{amount: float, asset: string}|null
+     */
+    public static function resolveCryptoReceivedAtCentiiv(array $meta, array $merged = []): ?array
+    {
+        $fromAsset = strtoupper(trim((string) self::firstNonEmptyString([
+            is_string($merged['fromAsset'] ?? null) ? (string) $merged['fromAsset'] : null,
+            is_string($merged['from_asset'] ?? null) ? (string) $merged['from_asset'] : null,
+        ]) ?? ''));
+        $orderAmt = $merged['amount'] ?? null;
+        if ($fromAsset !== '' && $fromAsset !== 'NGN' && is_numeric($orderAmt) && (float) $orderAmt > 0) {
+            return ['amount' => (float) $orderAmt, 'asset' => $fromAsset];
+        }
+
+        $onrampCrypto = SendraCentiivRampService::extractOnrampCryptoAtCentiiv($merged);
+        if ($onrampCrypto !== null) {
+            return $onrampCrypto;
+        }
+
+        foreach (['centiiv_crypto_received', 'centiiv_usdc_amount', 'centiiv_usdc'] as $k) {
+            if (!isset($meta[$k]) || !is_numeric($meta[$k]) || (float) $meta[$k] <= 0) {
+                continue;
+            }
+
+            $asset = strtoupper(trim((string) ($meta['centiiv_crypto_asset'] ?? 'USDC')));
+            if ($asset === '') {
+                $asset = 'USDC';
+            }
+
+            return ['amount' => (float) $meta[$k], 'asset' => $asset];
+        }
+
+        $depositAmt = self::firstNonEmptyString([
+            $meta['depositAmount'] ?? null,
+            $meta['deposit_amount'] ?? null,
+        ]);
+        if ($depositAmt !== null && is_numeric($depositAmt) && (float) $depositAmt > 0) {
+            $asset = strtoupper(trim((string) ($meta['depositAsset'] ?? $meta['deposit_asset'] ?? 'USDC')));
+
+            return ['amount' => (float) $depositAmt, 'asset' => $asset !== '' ? $asset : 'USDC'];
+        }
+
+        return null;
+    }
+
+    /**
+     * 0.5% (configurable) of crypto received at Centiiv.
+     *
+     * @param array{amount: float, asset: string}|null $cryptoAtCentiiv
+     * @return array{transaction_fee_crypto: ?float, transaction_fee_asset: ?string, transaction_fee_ngn: ?float}
+     */
+    public static function computeCentiivTransactionFee(?array $cryptoAtCentiiv, ?float $ngnPerCryptoUnit = null): array
+    {
+        $empty = [
+            'transaction_fee_crypto' => null,
+            'transaction_fee_asset' => null,
+            'transaction_fee_ngn' => null,
+        ];
+        if ($cryptoAtCentiiv === null || ($cryptoAtCentiiv['amount'] ?? 0) <= 0) {
+            return $empty;
+        }
+
+        $bps = self::centiivTransactionFeeBps();
+        if ($bps <= 0) {
+            return $empty;
+        }
+
+        $feeCrypto = round((float) $cryptoAtCentiiv['amount'] * $bps / 10000, 8);
+        if ($feeCrypto <= 0) {
+            return $empty;
+        }
+
+        $asset = strtoupper(trim((string) ($cryptoAtCentiiv['asset'] ?? 'USDC')));
+        $feeNgn = null;
+        if ($ngnPerCryptoUnit !== null && $ngnPerCryptoUnit > 0) {
+            $feeNgn = round($feeCrypto * $ngnPerCryptoUnit, 2);
+        }
+
+        return [
+            'transaction_fee_crypto' => $feeCrypto,
+            'transaction_fee_asset' => $asset !== '' ? $asset : 'USDC',
+            'transaction_fee_ngn' => $feeNgn,
+        ];
+    }
+
+    /**
+     * @param array<string, mixed> $meta
+     * @param array<string, mixed> $merged
+     * @return array{transaction_fee_crypto: ?float, transaction_fee_asset: ?string, transaction_fee_ngn: ?float}
+     */
+    public static function resolveReceiptTransactionFee(array $meta, array $merged = [], ?float $ngnPerCryptoUnit = null): array
+    {
+        if (isset($meta['sendra_transaction_fee_crypto']) && is_numeric($meta['sendra_transaction_fee_crypto'])) {
+            return [
+                'transaction_fee_crypto' => round((float) $meta['sendra_transaction_fee_crypto'], 8),
+                'transaction_fee_asset' => strtoupper(trim((string) ($meta['sendra_transaction_fee_asset'] ?? 'USDC'))) ?: 'USDC',
+                'transaction_fee_ngn' => isset($meta['sendra_transaction_fee_ngn']) && is_numeric($meta['sendra_transaction_fee_ngn'])
+                    ? round((float) $meta['sendra_transaction_fee_ngn'], 2) : null,
+            ];
+        }
+
+        $cryptoAtCentiiv = self::resolveCryptoReceivedAtCentiiv($meta, $merged);
+
+        return self::computeCentiivTransactionFee($cryptoAtCentiiv, $ngnPerCryptoUnit);
+    }
+
+    /**
+     * NGN equivalent of the transaction fee for receipt display.
+     *
+     * @param array<string, mixed> $model
+     */
+    public static function resolveTransactionFeeNgnForDisplay(array $model): ?float
+    {
+        $feeNgn = $model['transaction_fee_ngn'] ?? null;
+        if (is_numeric($feeNgn) && (float) $feeNgn > 0) {
+            return round((float) $feeNgn, 2);
+        }
+
+        $feeCrypto = $model['transaction_fee_crypto'] ?? null;
+        if (!is_numeric($feeCrypto) || (float) $feeCrypto <= 0) {
+            return null;
+        }
+
+        $ngnPerCrypto = self::resolveNgnPerCryptoFromReceiptModel($model);
+        if ($ngnPerCrypto === null || $ngnPerCrypto <= 0) {
+            return null;
+        }
+
+        return round((float) $feeCrypto * $ngnPerCrypto, 2);
+    }
+
+    /**
+     * Maps a Centiiv toAsset (e.g. "XOF", "NGN", "GHS") to its display symbol.
+     */
+    public static function fiatCurrencySymbol(string $currency): string
+    {
+        return match (strtoupper(trim($currency))) {
+            'NGN'   => '₦',
+            'XOF', 'XAF' => 'CFA',
+            'GHS'   => 'GH₵',
+            'KES'   => 'KSh',
+            'UGX'   => 'USh',
+            'ETB'   => 'Br',
+            'TZS'   => 'TSh',
+            'RWF'   => 'RF',
+            'MZN'   => 'MT',
+            'ZAR'   => 'R',
+            'MAD'   => 'MAD',
+            'EGP'   => 'E£',
+            default => strtoupper(trim($currency)),
+        };
+    }
+
+    /**
+     * Returns the ISO 4217 code for the local fiat on a receipt model.
+     *
+     * @param array<string, mixed> $model
+     */
+    public static function receiptFiatCurrency(array $model): string
+    {
+        $c = strtoupper(trim((string) ($model['fiat_currency'] ?? '')));
+
+        return $c !== '' ? $c : 'NGN';
+    }
+
+    /**
+     * @param array<string, mixed> $model
+     */
+    public static function formatNgnReceiptAmount(float $ngn): string
+    {
+        return '₦' . number_format(
+            $ngn,
+            abs($ngn - round($ngn)) < 0.005 ? 0 : 2,
+            '.',
+            ','
+        );
+    }
+
+    /**
+     * Formats a fiat amount for display with the correct currency symbol.
+     * For XOF/XAF the symbol is a suffix ("683 CFA"), for others it's a prefix.
+     */
+    public static function formatFiatReceiptAmount(float $amount, string $currency): string
+    {
+        $currency = strtoupper(trim($currency));
+        $symbol   = self::fiatCurrencySymbol($currency);
+        $decimals = in_array($currency, ['XOF', 'XAF', 'UGX', 'RWF', 'TZS', 'ETB'], true) ? 0 : 2;
+        $decimals = abs($amount - round($amount)) < 0.005 ? 0 : $decimals;
+        $formatted = number_format($amount, $decimals, '.', ',');
+        // CFA and multi-char codes go as suffix for readability; single-char symbols are prefix.
+        if (strlen($symbol) > 1 && !in_array($symbol[0], ['₦', '₵', 'E', 'R', 'M', 'T', 'B', 'U'], true)) {
+            return $formatted . ' ' . $symbol;
+        }
+
+        return $symbol . ' ' . $formatted;
+    }
+
+    /**
+     * Human-readable transaction fee for receipt templates (local fiat currency).
+     *
+     * @param array<string, mixed> $model
+     */
+    public static function formatTransactionFeeDisplay(array $model): ?string
+    {
+        if (!self::showTransactionFeeOnReceipt()) {
+            return null;
+        }
+
+        $feeNgn = self::resolveTransactionFeeNgnForDisplay($model);
+        if ($feeNgn !== null && $feeNgn > 0) {
+            $currency = self::receiptFiatCurrency($model);
+
+            return self::formatFiatReceiptAmount($feeNgn, $currency);
+        }
+
+        $feeCrypto = $model['transaction_fee_crypto'] ?? null;
+        $feeAsset = strtoupper(trim((string) ($model['transaction_fee_asset'] ?? '')));
+        if (is_numeric($feeCrypto) && (float) $feeCrypto > 0 && $feeAsset !== '') {
+            $s = rtrim(rtrim(number_format((float) $feeCrypto, 6, '.', ''), '0'), '.');
+
+            return ($s !== '' ? $s : '0') . ' ' . $feeAsset;
+        }
+
+        return null;
+    }
+
+    /**
+     * NGN per 1 unit of crypto at Centiiv (for fee local-currency display).
+     *
+     * @param array<string, mixed> $model
+     */
+    private static function resolveNgnPerCryptoFromReceiptModel(array $model): ?float
+    {
+        $amountNgn = $model['amount_ngn'] ?? null;
+        if (!is_numeric($amountNgn) || (float) $amountNgn <= 0) {
+            return null;
+        }
+
+        foreach (['centiiv_crypto_received', 'centiiv_usdc_amount', 'centiiv_usdc'] as $key) {
+            if (isset($model[$key]) && is_numeric($model[$key]) && (float) $model[$key] > 0) {
+                return (float) $amountNgn / (float) $model[$key];
+            }
+        }
+
+        $receiveAmt = $model['receive_amount'] ?? null;
+        if (is_numeric($receiveAmt) && (float) $receiveAmt > 0) {
+            return (float) $amountNgn / (float) $receiveAmt;
+        }
+
+        $withdrawAmt = $model['withdraw_amount'] ?? null;
+        if (is_numeric($withdrawAmt) && (float) $withdrawAmt > 0) {
+            return (float) $amountNgn / (float) $withdrawAmt;
+        }
+
+        return null;
+    }
+
+    /**
      * @param array<string, mixed> $event
      * @param array{user_phone: ?string, status: string, order_label: string, oneclick_correlation_id: string} $norm
      * @return array<string, mixed> Model for {@see SendraPayoutReceiptImageService::renderToTempFile()}
@@ -58,7 +411,7 @@ final class SendraCentiivPayoutReceiptFactory
             $req = $agg->getRequest($orderId);
             if ($req['success']) {
                 $apiSlice = self::unwrapCentiivPayload($req['data']);
-                $merged = array_merge($eventData, $apiSlice);
+                $merged = self::mergeReceiptOrderPayload($eventData, $apiSlice);
             }
         }
 
@@ -78,6 +431,11 @@ final class SendraCentiivPayoutReceiptFactory
                 'bankCode' => $benDetails['bankCode'] ?? $benDetails['bank_code'] ?? $beneficiary['bankCode'] ?? null,
             ]);
         }
+        $benExternalId = self::firstNonEmptyString([
+            $beneficiary['externalId'] ?? null,
+            $beneficiary['external_id'] ?? null,
+        ]);
+        $isIntermediaryPoolReceipt = $benExternalId === 'sendra_intermediary_ngn';
         $disbRec = self::coerceArr($merged['recipient'] ?? null);
         if ($disbRec !== [] && ($beneficiary === [] || ($beneficiary['accountName'] ?? $beneficiary['account_name'] ?? '') === '')) {
             $beneficiary = array_merge($beneficiary, [
@@ -148,7 +506,50 @@ final class SendraCentiivPayoutReceiptFactory
 
         $bankLine = $bankName !== '' ? ($bankName . '  |  ' . $acct) : $acct;
 
-        $amount = self::extractNgnAmount($merged, $meta);
+        $fulfillmentNgn = self::extractNgnAmount($merged, $meta);
+        $amount = $fulfillmentNgn;
+        $requestedNgn = null;
+        if (isset($meta['sendra_requested_ngn']) && is_numeric($meta['sendra_requested_ngn'])) {
+            $requestedNgn = round((float) $meta['sendra_requested_ngn'], 2);
+            if ($requestedNgn > 0) {
+                $amount = $requestedNgn;
+            }
+        }
+        if ($isIntermediaryPoolReceipt) {
+            if ($requestedNgn === null || $requestedNgn <= 0) {
+                throw new \RuntimeException(
+                    'Intermediary Centiiv order receipt must use user bank disburse context, not pool fulfillment'
+                );
+            }
+            $userAcct = trim((string) ($meta['sendra_user_account_number'] ?? ''));
+            $userName = trim((string) ($meta['sendra_user_account_name'] ?? ''));
+            $userBank = trim((string) ($meta['sendra_user_bank_name'] ?? ''));
+            if ($userAcct !== '' && strlen($userAcct) === 10) {
+                $acct = $userAcct;
+            }
+            if ($userName !== '') {
+                $recipient = $userName;
+            }
+            if ($userBank !== '') {
+                $bankName = $userBank;
+                $bankLine = $userBank . '  |  ' . $acct;
+            }
+            $amount = $requestedNgn;
+        }
+
+        $transactionFeeNgn = null;
+        $transactionFeeCrypto = null;
+        $transactionFeeAsset = null;
+        $cryptoAtCentiiv = self::resolveCryptoReceivedAtCentiiv($meta, $merged);
+        $ngnPerCrypto = null;
+        if ($cryptoAtCentiiv !== null && $amount !== null && $amount > 0) {
+            $ngnPerCrypto = (float) $amount / (float) $cryptoAtCentiiv['amount'];
+        }
+        $feeFields = self::resolveReceiptTransactionFee($meta, $merged, $ngnPerCrypto);
+        $transactionFeeNgn = $feeFields['transaction_fee_ngn'];
+        $transactionFeeCrypto = $feeFields['transaction_fee_crypto'];
+        $transactionFeeAsset = $feeFields['transaction_fee_asset'];
+
         $txId = self::firstNonEmptyString([
             $ful0['disbursalRef'] ?? null,
             $ful0['disbursalSessionId'] ?? null,
@@ -175,7 +576,7 @@ final class SendraCentiivPayoutReceiptFactory
             is_string($event['timestamp'] ?? null) ? $event['timestamp'] : null,
         ]);
 
-        $payoutPartner = self::resolvePayoutPartner($merged, $meta);
+        $payoutPartner = self::resolvePayoutPartner($merged, $meta, $ful0);
         $oneclick = trim((string) ($norm['oneclick_correlation_id'] ?? ''));
         $bridgeNote = $oneclick !== '' ? ('Crypto bridge (1Click): ' . $oneclick) : '';
 
@@ -194,17 +595,15 @@ final class SendraCentiivPayoutReceiptFactory
             is_string($event['timestamp'] ?? null) ? $event['timestamp'] : null,
         ]);
 
-        // Crypto amount withdrawn + fees (often found under metadata.metadata.quote + sendra_ledger_* fields)
-        $ledgerAsset = self::firstNonEmptyString([
-            is_string($meta['sendra_ledger_asset'] ?? null) ? (string) $meta['sendra_ledger_asset'] : null,
-            is_string($merged['fromAsset'] ?? null) ? (string) $merged['fromAsset'] : null,
-            is_string($merged['from_asset'] ?? null) ? (string) $merged['from_asset'] : null,
-        ]) ?? 'USDT';
-        $ledgerAmtRaw = self::firstNonEmptyString([
-            is_string($meta['sendra_ledger_amount'] ?? null) ? (string) $meta['sendra_ledger_amount'] : null,
-            is_numeric($merged['amount'] ?? null) ? (string) $merged['amount'] : null,
-        ]);
-        $ledgerAmt = is_numeric($ledgerAmtRaw ?? null) ? (float) $ledgerAmtRaw : null;
+        // User-requested wallet debit (e.g. 1 USDT), not the Centiiv order USDC amount after 1Click.
+        [$ledgerAsset, $ledgerAmt] = self::resolveLedgerWithdrawFields($meta, $merged, $norm);
+
+        // Resolve the local fiat currency from the Centiiv order (toAsset). Falls back to NGN.
+        $toAsset = strtoupper(trim((string) ($merged['toAsset'] ?? $merged['to_asset'] ?? '')));
+        $fiatCurrency = in_array($toAsset, [
+            'NGN', 'XOF', 'XAF', 'GHS', 'KES', 'UGX', 'TZS', 'ETB', 'RWF', 'MZN', 'ZAR', 'MAD', 'EGP',
+        ], true) ? $toAsset : 'NGN';
+        $fiatSymbol = self::fiatCurrencySymbol($fiatCurrency);
 
         $quote = is_array($meta['quote'] ?? null) ? $meta['quote'] : null;
         $conversionRate = self::resolveConversionRateDisplay(
@@ -212,10 +611,13 @@ final class SendraCentiivPayoutReceiptFactory
             $ledgerAmt,
             strtoupper(trim((string) $ledgerAsset)),
             $merged,
-            $quote
+            $quote,
+            $fiatCurrency
         );
 
-        $displayReference = self::resolveDisplayReference($merged, $meta, $ful0, $txId, $storedPayoutReference);
+        $displayReference = self::formatBankTransferReferenceForDisplay(
+            self::resolveDisplayReference($merged, $meta, $ful0, $txId, $storedPayoutReference)
+        );
 
         return [
             // Legacy fields (used by older receipt design)
@@ -226,12 +628,20 @@ final class SendraCentiivPayoutReceiptFactory
             'bank_name' => $bankName !== '' ? $bankName : '—',
             'account_name' => $recipient,
             'account_number' => $acct,
-            'sender_name' => self::resolveReceiptSenderLabel(),
+            'sender_name' => self::resolveReceiptSenderLabel($isIntermediaryPoolReceipt, $merged, $meta, $ful0),
             'withdraw_asset' => strtoupper(trim((string) $ledgerAsset)),
             'withdraw_amount' => $ledgerAmt,
             'conversion_rate' => $conversionRate,
 
-            'amount_ngn' => $amount,
+            // Fiat currency on this payout (XOF for Togo/Benin, NGN for Nigeria, etc.)
+            'fiat_currency' => $fiatCurrency,
+            'fiat_symbol'   => $fiatSymbol,
+
+            'amount_ngn' => $amount,   // Kept as-is for back-compat; holds the local fiat amount regardless of currency
+            'transaction_fee_ngn' => $transactionFeeNgn,
+            'transaction_fee_crypto' => $transactionFeeCrypto,
+            'transaction_fee_asset' => $transactionFeeAsset,
+            'centiiv_crypto_received' => $cryptoAtCentiiv['amount'] ?? null,
             'transaction_id' => $txId,
             /** Matches Opay/bank Remark (Nomba disbursalRef) when available. */
             'display_reference' => $displayReference,
@@ -261,15 +671,34 @@ final class SendraCentiivPayoutReceiptFactory
      * @param array<string, mixed> $merged
      * @param array<string, mixed>|null $quote
      */
+    public static function formatConversionRateDisplay(
+        ?float $amountNgn,
+        ?float $withdrawAmount,
+        string $asset,
+        array $merged = [],
+        ?array $quote = null
+    ): string {
+        return self::resolveConversionRateDisplay($amountNgn, $withdrawAmount, $asset, $merged, $quote);
+    }
+
+    /**
+     * @param array<string, mixed> $merged
+     * @param array<string, mixed>|null $quote
+     * @param string $fiatCurrency ISO-4217 code of the local fiat (default: NGN)
+     */
     private static function resolveConversionRateDisplay(
         ?float $amountNgn,
         ?float $withdrawAmount,
         string $asset,
         array $merged,
-        ?array $quote
+        ?array $quote,
+        string $fiatCurrency = 'NGN'
     ): string {
         if ($asset === '') {
             $asset = 'USDC';
+        }
+        if ($fiatCurrency === '') {
+            $fiatCurrency = 'NGN';
         }
 
         $rate = null;
@@ -280,6 +709,10 @@ final class SendraCentiivPayoutReceiptFactory
                     break;
                 }
             }
+        }
+
+        if ($rate === null) {
+            $rate = SendraCentiivRampService::extractOfficialNgnRateFromOrder($merged);
         }
 
         if ($rate === null) {
@@ -295,7 +728,88 @@ final class SendraCentiivPayoutReceiptFactory
             return '—';
         }
 
-        return '₦' . number_format($rate, 2, '.', ',');
+        $symbol = self::fiatCurrencySymbol($fiatCurrency);
+        $decimals = in_array($fiatCurrency, ['XOF', 'XAF', 'UGX', 'RWF', 'TZS', 'ETB'], true) ? 0 : 2;
+        $formatted = number_format($rate, $decimals, '.', ',');
+        if (strlen($symbol) > 1 && !in_array($symbol[0], ['₦', '₵', 'E', 'R', 'M', 'T', 'B', 'U'], true)) {
+            return $formatted . ' ' . $symbol;
+        }
+
+        return $symbol . $formatted;
+    }
+
+    /**
+     * Official Centiiv conversion rate for intermediary payout receipts (from order metadata, not payout÷USDT).
+     *
+     * @param array<string, mixed> $ctx
+     */
+    public static function formatIntermediaryReceiptConversionRate(array $ctx): string
+    {
+        $requested = (float) ($ctx['requested_ngn'] ?? 0);
+        $withdrawAmount = isset($ctx['sendra_ledger_amount']) && is_numeric($ctx['sendra_ledger_amount'])
+            ? (float) $ctx['sendra_ledger_amount']
+            : null;
+        $asset = strtoupper(trim((string) ($ctx['sendra_ledger_asset'] ?? 'USDT')));
+
+        $merged = [];
+        $quote = null;
+        if (isset($ctx['daya_rate']) && is_numeric($ctx['daya_rate']) && (float) $ctx['daya_rate'] > 0) {
+            $quote = ['rate' => (float) $ctx['daya_rate']];
+        } elseif (isset($ctx['centiiv_order_rate']) && is_numeric($ctx['centiiv_order_rate']) && (float) $ctx['centiiv_order_rate'] > 0) {
+            $quote = ['rate' => (float) $ctx['centiiv_order_rate']];
+        } elseif (!empty($ctx['centiiv_order_id'])) {
+            $agg = new SendraCentiivRampService();
+            if ($agg->isConfigured()) {
+                $res = $agg->getRequest((string) $ctx['centiiv_order_id']);
+                if (!empty($res['success']) && is_array($res['data'])) {
+                    $orderData = $res['data']['data'] ?? $res['data'];
+                    if (is_array($orderData)) {
+                        $merged = $orderData;
+                        $meta = is_array($orderData['metadata'] ?? null) ? $orderData['metadata'] : [];
+                        $quote = is_array($meta['quote'] ?? null) ? $meta['quote'] : null;
+                    }
+                }
+            }
+        }
+
+        return self::formatConversionRateDisplay(
+            $requested > 0 ? $requested : null,
+            $withdrawAmount,
+            $asset,
+            $merged,
+            $quote
+        );
+    }
+
+    /**
+     * Transaction fee on intermediary receipts — 0.5% of crypto received at Centiiv.
+     *
+     * @param array<string, mixed> $ctx
+     * @return array{transaction_fee_crypto: ?float, transaction_fee_asset: ?string, transaction_fee_ngn: ?float}
+     */
+    public static function resolveIntermediaryReceiptFee(float $requestedNgn, array $ctx): array
+    {
+        $meta = [
+            'centiiv_crypto_received' => $ctx['centiiv_crypto_received'] ?? null,
+            'centiiv_crypto_asset' => $ctx['centiiv_crypto_asset'] ?? ($ctx['sendra_ledger_asset'] ?? 'USDT'),
+        ];
+        $ngnPerCrypto = null;
+        if (isset($meta['centiiv_crypto_received']) && is_numeric($meta['centiiv_crypto_received']) && (float) $meta['centiiv_crypto_received'] > 0 && $requestedNgn > 0) {
+            $ngnPerCrypto = $requestedNgn / (float) $meta['centiiv_crypto_received'];
+        }
+
+        return self::resolveReceiptTransactionFee($meta, [], $ngnPerCrypto);
+    }
+
+    /**
+     * @deprecated Use {@see resolveIntermediaryReceiptFee()} — kept for scripts that expect NGN only.
+     * @param array<string, mixed> $ctx
+     */
+    public static function resolveIntermediaryReceiptFeeNgn(float $requestedNgn, array $ctx): ?float
+    {
+        $fee = self::resolveIntermediaryReceiptFee($requestedNgn, $ctx);
+
+        return $fee['transaction_fee_ngn'];
     }
 
     private static function resolveBankNameFromCode(SendraCentiivRampService $agg, string $bankCode): ?string
@@ -324,6 +838,119 @@ final class SendraCentiivPayoutReceiptFactory
      * @param array<string, mixed> $decoded Top-level JSON from Centiiv GET
      * @return array<string, mixed>
      */
+    /**
+     * Centiiv GET /requests often omits bank remark / API-TRANSFER ids present on webhooks.
+     *
+     * @param array<string, mixed> $eventData
+     * @param array<string, mixed> $apiSlice
+     * @return array<string, mixed>
+     */
+    private static function mergeReceiptOrderPayload(array $eventData, array $apiSlice): array
+    {
+        $merged = array_merge($eventData, $apiSlice);
+
+        $eventFul = is_array($eventData['fulfillments'][0] ?? null) ? $eventData['fulfillments'][0] : [];
+        $apiFul = is_array($merged['fulfillments'][0] ?? null) ? $merged['fulfillments'][0] : [];
+        if ($eventFul !== []) {
+            $overlay = [];
+            foreach ([
+                'remark',
+                'narration',
+                'bankRemark',
+                'bank_remark',
+                'transferRemark',
+                'paymentRemark',
+                'description',
+                'paymentDescription',
+                'payment_description',
+                'disbursalRef',
+                'disbursal_ref',
+                'disbursalSessionId',
+                'disbursal_session_id',
+                'lpName',
+                'providerName',
+            ] as $k) {
+                $v = $eventFul[$k] ?? null;
+                if (is_string($v) && trim($v) !== '') {
+                    $overlay[$k] = trim($v);
+                }
+            }
+            foreach ($eventFul as $v) {
+                if (is_string($v) && stripos($v, 'API-TRANSFER') !== false) {
+                    $overlay['remark'] = trim($v);
+                    break;
+                }
+            }
+            if ($overlay !== []) {
+                $merged['fulfillments'] = $merged['fulfillments'] ?? [];
+                if (!is_array($merged['fulfillments'])) {
+                    $merged['fulfillments'] = [];
+                }
+                $merged['fulfillments'][0] = array_merge($apiFul, $overlay);
+            }
+        }
+
+        $eventMeta = is_array($eventData['metadata'] ?? null) ? $eventData['metadata'] : [];
+        $mergedMeta = is_array($merged['metadata'] ?? null) ? $merged['metadata'] : [];
+        if ($eventMeta !== []) {
+            $metaOverlay = [];
+            foreach ($eventMeta as $k => $v) {
+                if (!is_string($k)) {
+                    continue;
+                }
+                if (is_string($v) && (stripos($v, 'API-TRANSFER') !== false || str_starts_with($k, 'sendra_'))) {
+                    $metaOverlay[$k] = $v;
+                }
+            }
+            if ($metaOverlay !== []) {
+                $merged['metadata'] = array_merge($mergedMeta, $metaOverlay);
+            }
+        }
+
+        foreach ($eventData as $v) {
+            if (is_string($v) && stripos($v, 'API-TRANSFER') !== false) {
+                $merged['bank_remark'] = trim($v);
+                break;
+            }
+        }
+
+        return $merged;
+    }
+
+    /**
+     * Reference line for intermediary disburse receipts (bank narration when available).
+     *
+     * @param array<string, mixed> $ctx
+     * @param array<string, mixed> $eventPayload
+     */
+    public static function resolveIntermediaryDisplayReference(array $ctx, array $eventPayload = []): string
+    {
+        foreach ([$eventPayload, $ctx] as $blob) {
+            $hit = self::scanPayloadForApiTransfer($blob);
+            if ($hit !== null) {
+                return $hit;
+            }
+        }
+
+        foreach ([
+            $ctx['bank_remark'] ?? null,
+            $ctx['narration'] ?? null,
+            $ctx['sendra_payout_reference'] ?? null,
+            $ctx['disburse_tracking_id'] ?? null,
+            $ctx['centiiv_order_id'] ?? null,
+        ] as $candidate) {
+            if (!is_string($candidate)) {
+                continue;
+            }
+            $formatted = self::formatBankTransferReferenceForDisplay(trim($candidate));
+            if ($formatted !== '' && $formatted !== '—') {
+                return $formatted;
+            }
+        }
+
+        return '—';
+    }
+
     private static function unwrapCentiivPayload(array $decoded): array
     {
         $inner = $decoded['data'] ?? null;
@@ -357,10 +984,12 @@ final class SendraCentiivPayoutReceiptFactory
      */
     private static function extractNgnAmount(array $merged, array $meta = []): ?float
     {
-        // Terminal webhook payloads often include the actual NGN sent in fulfillments[0].amount.
-        // Prefer that when the destination rail is NGN.
+        // Terminal webhook / GET /requests payloads include the actual local fiat sent in
+        // fulfillments[0].amount. Previously this was only read for NGN, which caused the
+        // hero amount to be blank on XOF (Togo/Benin CFA) and other non-NGN mobile-money receipts.
         $toAsset = strtoupper((string) ($merged['toAsset'] ?? $merged['to_asset'] ?? ''));
-        if ($toAsset === 'NGN' && isset($merged['fulfillments'][0]) && is_array($merged['fulfillments'][0])) {
+        $supportedFiats = ['NGN', 'XOF', 'XAF', 'GHS', 'KES', 'UGX', 'TZS', 'ETB', 'RWF', 'MZN', 'ZAR', 'MAD', 'EGP'];
+        if (in_array($toAsset, $supportedFiats, true) && isset($merged['fulfillments'][0]) && is_array($merged['fulfillments'][0])) {
             $f0 = $merged['fulfillments'][0];
             $fa = $f0['amount'] ?? $f0['payoutAmount'] ?? $f0['payout_amount'] ?? null;
             if ($fa !== null && $fa !== '' && is_numeric($fa)) {
@@ -373,9 +1002,9 @@ final class SendraCentiivPayoutReceiptFactory
             return round((float) $quote['estimatedReceivableAmount'], 2);
         }
 
-        $summary = SendraCentiivRampService::summarizeQuoteNgn($merged, null);
-        if ($summary['receive_ngn'] !== null) {
-            return $summary['receive_ngn'];
+        $summary = SendraCentiivRampService::summarizeQuoteFiat($merged, $toAsset !== '' ? $toAsset : 'NGN', null);
+        if ($summary['receive_fiat'] !== null) {
+            return $summary['receive_fiat'];
         }
 
         $cur = strtoupper((string) ($merged['currency'] ?? ''));
@@ -593,14 +1222,14 @@ final class SendraCentiivPayoutReceiptFactory
     private static function scanPayloadForApiTransfer($node): ?string
     {
         if (!is_array($node)) {
-            if (is_string($node) && preg_match('/(API-TRANSFER-[A-Za-z0-9-]+)/i', $node, $m)) {
+            if (is_string($node) && preg_match('/API-TRANSFER-([A-Za-z0-9-]+)/i', $node, $m)) {
                 return $m[1];
             }
 
             return null;
         }
         foreach ($node as $v) {
-            if (is_string($v) && preg_match('/(API-TRANSFER-[A-Za-z0-9-]+)/i', $v, $m)) {
+            if (is_string($v) && preg_match('/API-TRANSFER-([A-Za-z0-9-]+)/i', $v, $m)) {
                 return $m[1];
             }
             if (is_array($v)) {
@@ -665,19 +1294,46 @@ final class SendraCentiivPayoutReceiptFactory
             }
         }
 
+        foreach (['description', 'paymentDescription', 'payment_description'] as $k) {
+            $v = self::firstNonEmptyString([
+                $ful0[$k] ?? null,
+                $merged[$k] ?? null,
+                $meta[$k] ?? null,
+            ]);
+            if ($v !== null && stripos($v, 'API-TRANSFER') !== false) {
+                return $v;
+            }
+        }
+
         return '';
+    }
+
+    /**
+     * Bank apps show API-TRANSFER ids without the prefix (e.g. B5D61-5346167d-… not API-TRANSFER-B5D61-…).
+     */
+    public static function formatBankTransferReferenceForDisplay(string $value): string
+    {
+        $value = trim($value);
+        if ($value === '' || $value === '—') {
+            return '—';
+        }
+        if (preg_match('/API-TRANSFER-([A-Za-z0-9-]+)/i', $value, $m)) {
+            return $m[1];
+        }
+
+        return $value;
     }
 
     private static function extractRemarkTransferReference(string $remark): ?string
     {
-        if (preg_match('/(API-TRANSFER-[A-Za-z0-9-]+)/i', $remark, $m)) {
+        if (preg_match('/API-TRANSFER-([A-Za-z0-9-]+)/i', $remark, $m)) {
             return $m[1];
         }
         $parts = preg_split('/\|/u', $remark, -1, PREG_SPLIT_NO_EMPTY);
         if (is_array($parts) && count($parts) > 1) {
             $tail = trim((string) end($parts));
             if ($tail !== '') {
-                return $tail;
+                return self::formatBankTransferReferenceForDisplay($tail);
             }
         }
 
@@ -687,6 +1343,9 @@ final class SendraCentiivPayoutReceiptFactory
     private static function looksLikeBankTransferReference(string $value): bool
     {
         if (preg_match('/^API-TRANSFER-/i', $value)) {
+            return true;
+        }
+        if (preg_match('/^[A-Za-z0-9]{3,8}-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $value)) {
             return true;
         }
         if (preg_match('/^SR-\d{6}-[A-Fa-f0-9]{8,}$/i', $value)) {
@@ -699,39 +1358,76 @@ final class SendraCentiivPayoutReceiptFactory
         return false;
     }
 
-    /** NGN rail sender line on the WhatsApp receipt (Opay shows Nomba, not the crypto LP). */
-    private static function resolveReceiptSenderLabel(): string
-    {
-        $env = trim((string) ($_ENV['SENDRA_RECEIPT_LIQUIDITY_LABEL'] ?? getenv('SENDRA_RECEIPT_LIQUIDITY_LABEL') ?: ''));
+    /**
+     * NGN rail sender line on the WhatsApp receipt.
+     *
+     * Prefer live provider/sender from the rail payload when present; otherwise fall back
+     * per provider: UseSendra LTD/Centiiv or UseSendra LTD/Daya.
+     *
+     * @param array<string, mixed> $merged Centiiv order / Daya deposit (or similar) payload
+     * @param array<string, mixed> $meta
+     * @param array<string, mixed> $fulfillment
+     * @param 'centiiv'|'daya'|null $provider Rail that paid the user; null treats as Centiiv
+     */
+    public static function resolveReceiptSenderLabel(
+        bool $isIntermediaryPayout = false,
+        array $merged = [],
+        array $meta = [],
+        array $fulfillment = [],
+        ?string $provider = null
+    ): string {
+        $fromApi = self::resolveProviderNameFromPayload($merged, $meta, $fulfillment);
+        if ($fromApi !== null) {
+            return $fromApi;
+        }
 
-        return $env !== '' ? $env : self::DEFAULT_SENDER_NAME;
+        $rail = strtolower(trim((string) ($provider ?? '')));
+        if ($rail === '') {
+            $rail = 'centiiv';
+        }
+
+        if ($rail === 'daya') {
+            $env = trim((string) ($_ENV['SENDRA_RECEIPT_DAYA_SENDER_LABEL'] ?? getenv('SENDRA_RECEIPT_DAYA_SENDER_LABEL') ?: ''));
+            if ($env === '') {
+                $env = trim((string) ($_ENV['SENDRA_RECEIPT_OFFRAMP_SENDER_LABEL'] ?? getenv('SENDRA_RECEIPT_OFFRAMP_SENDER_LABEL') ?: ''));
+            }
+
+            return $env !== '' ? $env : self::DAYA_OFFRAMP_SENDER_NAME;
+        }
+
+        if ($isIntermediaryPayout) {
+            $env = trim((string) ($_ENV['SENDRA_RECEIPT_INTERMEDIARY_SENDER_LABEL'] ?? getenv('SENDRA_RECEIPT_INTERMEDIARY_SENDER_LABEL') ?: ''));
+            if ($env !== '') {
+                return $env;
+            }
+            $legacy = trim((string) ($_ENV['SENDRA_RECEIPT_LIQUIDITY_LABEL'] ?? getenv('SENDRA_RECEIPT_LIQUIDITY_LABEL') ?: ''));
+            if ($legacy !== '') {
+                return $legacy;
+            }
+
+            return self::INTERMEDIARY_SENDER_NAME;
+        }
+
+        $env = trim((string) ($_ENV['SENDRA_RECEIPT_CENTIIV_SENDER_LABEL'] ?? getenv('SENDRA_RECEIPT_CENTIIV_SENDER_LABEL') ?: ''));
+        if ($env === '') {
+            $env = trim((string) ($_ENV['SENDRA_RECEIPT_OFFRAMP_SENDER_LABEL'] ?? getenv('SENDRA_RECEIPT_OFFRAMP_SENDER_LABEL') ?: ''));
+        }
+
+        return $env !== '' ? $env : self::OFFRAMP_SENDER_NAME;
     }
 
     /**
      * @param array<string, mixed> $merged
      * @param array<string, mixed> $meta
      */
-    private static function resolvePayoutPartner(array $merged, array $meta): string
+    private static function resolvePayoutPartner(array $merged, array $meta, array $fulfillment = []): string
     {
         $env = trim((string) ($_ENV['SENDRA_RECEIPT_LIQUIDITY_LABEL'] ?? getenv('SENDRA_RECEIPT_LIQUIDITY_LABEL') ?: ''));
         if ($env !== '') {
             return $env;
         }
 
-        $fromApi = self::firstNonEmptyString([
-            $meta['payout_partner'] ?? null,
-            $meta['liquidity_provider'] ?? null,
-            $meta['liquidityProvider'] ?? null,
-            $merged['liquidityProvider'] ?? null,
-            $merged['liquidity_provider'] ?? null,
-            $merged['provider'] ?? null,
-            $merged['providerName'] ?? null,
-            $merged['provider_name'] ?? null,
-            $merged['railName'] ?? null,
-            $merged['rail_name'] ?? null,
-            self::stringFromNested($merged['targetNode'] ?? null, ['name', 'label', 'title']),
-            self::stringFromNested($merged['node'] ?? null, ['name', 'label', 'title']),
-        ]);
+        $fromApi = self::resolveProviderNameFromPayload($merged, $meta, $fulfillment);
 
         if ($fromApi !== null && $fromApi !== '') {
             return $fromApi;
@@ -765,7 +1461,82 @@ final class SendraCentiivPayoutReceiptFactory
             }
         }
 
-        return self::DEFAULT_SENDER_NAME;
+        return self::INTERMEDIARY_SENDER_NAME;
+    }
+
+    /**
+     * Centiiv terminal payloads now include the rail/liquidity provider that actually paid the user,
+     * commonly as fulfillments[0].lpName (e.g. "Tech9ine Hub").
+     *
+     * @param array<string, mixed> $merged
+     * @param array<string, mixed> $meta
+     * @param array<string, mixed> $fulfillment
+     */
+    private static function resolveProviderNameFromPayload(array $merged, array $meta = [], array $fulfillment = []): ?string
+    {
+        if ($fulfillment === [] && isset($merged['fulfillments'][0]) && is_array($merged['fulfillments'][0])) {
+            $fulfillment = $merged['fulfillments'][0];
+        }
+
+        $settlement = is_array($merged['settlement_destination'] ?? null)
+            ? $merged['settlement_destination']
+            : (is_array($merged['settlement'] ?? null) ? $merged['settlement'] : []);
+
+        return self::firstNonEmptyString([
+            $fulfillment['lpName'] ?? null,
+            $fulfillment['lp_name'] ?? null,
+            $fulfillment['liquidityProviderName'] ?? null,
+            $fulfillment['liquidity_provider_name'] ?? null,
+            $fulfillment['liquidityProvider'] ?? null,
+            $fulfillment['liquidity_provider'] ?? null,
+            $fulfillment['payoutPartner'] ?? null,
+            $fulfillment['payout_partner'] ?? null,
+            $fulfillment['providerName'] ?? null,
+            $fulfillment['provider_name'] ?? null,
+            $fulfillment['senderName'] ?? null,
+            $fulfillment['sender_name'] ?? null,
+            $fulfillment['senderBankName'] ?? null,
+            $fulfillment['sender_bank_name'] ?? null,
+            $fulfillment['settlementBankName'] ?? null,
+            $fulfillment['settlement_bank_name'] ?? null,
+            $fulfillment['sourceBankName'] ?? null,
+            $fulfillment['source_bank_name'] ?? null,
+            self::stringFromNested($fulfillment['lp'] ?? null, ['name', 'label', 'title']),
+            self::stringFromNested($fulfillment['provider'] ?? null, ['name', 'label', 'title']),
+            self::stringFromNested($fulfillment['liquidityProvider'] ?? null, ['name', 'label', 'title']),
+            // Daya deposit / payout payloads (when present)
+            $merged['senderName'] ?? null,
+            $merged['sender_name'] ?? null,
+            $merged['payout_sender_name'] ?? null,
+            $merged['payoutSenderName'] ?? null,
+            self::stringFromNested($merged['sender'] ?? null, ['name', 'label', 'title', 'account_name']),
+            self::stringFromNested($settlement, ['sender_name', 'senderName', 'provider_name', 'providerName', 'name']),
+            self::stringFromNested($settlement['sender'] ?? null, ['name', 'label', 'title', 'account_name']),
+            $meta['lpName'] ?? null,
+            $meta['lp_name'] ?? null,
+            $meta['payout_partner'] ?? null,
+            $meta['payoutPartner'] ?? null,
+            $meta['liquidity_provider_name'] ?? null,
+            $meta['liquidityProviderName'] ?? null,
+            $meta['liquidity_provider'] ?? null,
+            $meta['liquidityProvider'] ?? null,
+            $meta['providerName'] ?? null,
+            $meta['provider_name'] ?? null,
+            $merged['lpName'] ?? null,
+            $merged['lp_name'] ?? null,
+            $merged['payoutPartner'] ?? null,
+            $merged['payout_partner'] ?? null,
+            $merged['liquidityProviderName'] ?? null,
+            $merged['liquidity_provider_name'] ?? null,
+            $merged['liquidityProvider'] ?? null,
+            $merged['liquidity_provider'] ?? null,
+            $merged['providerName'] ?? null,
+            $merged['provider_name'] ?? null,
+            $merged['railName'] ?? null,
+            $merged['rail_name'] ?? null,
+            self::stringFromNested($merged['targetNode'] ?? null, ['name', 'label', 'title']),
+            self::stringFromNested($merged['node'] ?? null, ['name', 'label', 'title']),
+        ]);
     }
 
     /**

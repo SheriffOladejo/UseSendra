@@ -54,18 +54,23 @@ final class SendraOfframpSlippageService
                     centiiv_order_id, user_phone, offramp_path,
                     target_ngn, quoted_ngn_at_pin, fulfillment_ngn,
                     usdt_debit, panora_wallet_usdc, stellar_deposit_usdc, centiiv_order_usdc,
-                    haircut_ratio, ngn_shortfall
+                    haircut_ratio, ngn_shortfall,
+                    oneclick_deposit_address, oneclick_swap_id, aptos_tx_hash
                 ) VALUES (
                     :oid, :phone, :path,
                     :target, :quoted, :fulfillment,
                     :usdt, :panora, :stellar, :order_usdc,
-                    :haircut, :shortfall
+                    :haircut, :shortfall,
+                    :oc_dep, :oc_swap, :tx_hash
                 )
                 ON DUPLICATE KEY UPDATE
                     fulfillment_ngn = VALUES(fulfillment_ngn),
                     stellar_deposit_usdc = COALESCE(VALUES(stellar_deposit_usdc), stellar_deposit_usdc),
                     haircut_ratio = COALESCE(VALUES(haircut_ratio), haircut_ratio),
-                    ngn_shortfall = VALUES(ngn_shortfall)'
+                    ngn_shortfall = VALUES(ngn_shortfall),
+                    oneclick_deposit_address = COALESCE(VALUES(oneclick_deposit_address), oneclick_deposit_address),
+                    oneclick_swap_id = COALESCE(VALUES(oneclick_swap_id), oneclick_swap_id),
+                    aptos_tx_hash = COALESCE(VALUES(aptos_tx_hash), aptos_tx_hash)'
             );
             $stmt->execute([
                 'oid' => $orderId,
@@ -80,6 +85,9 @@ final class SendraOfframpSlippageService
                 'order_usdc' => isset($row['centiiv_order_usdc']) ? (float) $row['centiiv_order_usdc'] : null,
                 'haircut' => $haircutRatio,
                 'shortfall' => round($shortfall, 2),
+                'oc_dep' => isset($row['oneclick_deposit_address']) ? trim((string) $row['oneclick_deposit_address']) : null,
+                'oc_swap' => isset($row['oneclick_swap_id']) ? trim((string) $row['oneclick_swap_id']) : null,
+                'tx_hash' => isset($row['aptos_tx_hash']) ? trim((string) $row['aptos_tx_hash']) : null,
             ]);
             self::invalidateCache();
 
@@ -175,7 +183,7 @@ final class SendraOfframpSlippageService
         return self::getLearnedBuffers()['haircut_bps_p90'];
     }
 
-    /** Extra NGN added to internal sizing target (learned P90 shortfall). */
+    /** Extra NGN added to internal sizing target when SENDRA_OFFRAMP_EXTRA_NGN_BUFFER is set (>0). */
     public static function extraNgnBuffer(): float
     {
         $forced = trim((string) ($_ENV['SENDRA_OFFRAMP_EXTRA_NGN_BUFFER'] ?? getenv('SENDRA_OFFRAMP_EXTRA_NGN_BUFFER') ?: ''));
@@ -183,7 +191,7 @@ final class SendraOfframpSlippageService
             return max(0.0, (float) $forced);
         }
 
-        return self::getLearnedBuffers()['extra_ngn_p90'];
+        return 0.0;
     }
 
     /**

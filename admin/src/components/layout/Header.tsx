@@ -1,9 +1,21 @@
-import { Bell } from 'lucide-react'
+import { Bell, Menu } from 'lucide-react'
 
-export function Header() {
+export function Header({ onOpenMenu }: { onOpenMenu?: () => void }) {
   return (
     <header className="flex items-center justify-between pb-6">
-      <p className="text-base font-medium text-gray-800">Welcome Victor 👋</p>
+      <div className="flex items-center gap-3">
+        {onOpenMenu && (
+          <button
+            type="button"
+            onClick={onOpenMenu}
+            className="rounded-xl border border-sendra-border bg-white p-2 text-gray-700 hover:bg-gray-50 md:hidden"
+            aria-label="Open menu"
+          >
+            <Menu className="h-5 w-5" />
+          </button>
+        )}
+        <p className="text-base font-medium text-gray-800">Welcome, Admin 👋</p>
+      </div>
       <div className="flex items-center gap-4">
         <button
           type="button"
@@ -13,10 +25,10 @@ export function Header() {
           <Bell className="h-5 w-5" />
         </button>
         <div
-          className="flex h-10 w-10 items-center justify-center rounded-full bg-gray-800 text-sm font-semibold text-white"
+          className="flex h-10 w-10 items-center justify-center rounded-full bg-sendra-primary text-sm font-semibold text-white shadow-sm"
           aria-hidden
         >
-          OV
+          SA
         </div>
       </div>
     </header>

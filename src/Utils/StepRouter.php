@@ -55,6 +55,14 @@ use App\Steps\Driver\RiderApprovedStep;
 use App\Steps\Logistics\ReviewPendingStep;
 use App\Steps\Logistics\LogisticsActiveJobStep;
 
+use App\Steps\Shop\ShopCheckoutLocationStep;
+use App\Steps\Shop\ShopCheckoutReceiverStep;
+use App\Steps\Vendor\VendorStoreNameStep;
+use App\Steps\Vendor\VendorPickupLocationStep;
+use App\Steps\Vendor\VendorMenuStep;
+use App\Steps\Vendor\VendorAddProductNameStep;
+use App\Steps\Vendor\VendorAddProductPriceStep;
+
 class StepRouter
 {
     private $steps = [
@@ -111,6 +119,17 @@ class StepRouter
 
         'awaiting_dropoff_pin' => LogisticsActiveJobStep::class,
         'awaiting_location_share' => LogisticsActiveJobStep::class,
+
+        'shop_menu' => ShowMenuStep::class,
+        'shop_checkout_location' => ShopCheckoutLocationStep::class,
+        'shop_checkout_receiver' => ShopCheckoutReceiverStep::class,
+        'marketplace_partial_fulfill' => ShowMenuStep::class,
+
+        'vendor_store_name' => VendorStoreNameStep::class,
+        'vendor_pickup_location' => VendorPickupLocationStep::class,
+        'vendor_menu' => VendorMenuStep::class,
+        'vendor_add_product_name' => VendorAddProductNameStep::class,
+        'vendor_add_product_price' => VendorAddProductPriceStep::class,
     ];
 
     private $sessionModel;

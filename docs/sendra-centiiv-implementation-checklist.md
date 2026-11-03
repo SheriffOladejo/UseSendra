@@ -71,9 +71,10 @@ Reference: [Create conversion order](https://c-vmch.readme.io/reference/createor
 - [x] Flow: `buy` → local fiat → asset USDC/USDT → optional destination (default user wallet).
 - [x] `createConversionOrder` with `fromAsset` NGN, `toAsset` USDC, `destinationAddress` = 1Click Stellar deposit.
 - [x] Present virtual bank account from API; webhook as source of truth.
-- [x] 1Click Stellar USDC → Aptos (`SendraOneClickService::buildStellarToAptosQuoteBody`, depositMode MEMO).
+- [x] 1Click Stellar USDC → Aptos (`buildStellarToAptosQuoteBody`, MEMO, default `SENDRA_BUY_ONECLICK_SWAP_TYPE=FLEX_INPUT`).
 - [ ] Confirm Centiiv NGN→USDC liquidity provider enabled in dashboard (quote may return "No liquidity provider available").
-- [x] Confirm Centiiv can pay Stellar USDC to 1Click deposit (`destinationMemo` + `destinationMemoType: id` on create order).
+- [x] Buy creates via `POST /requests` with `destinationMemo` + `destinationMemoType: id` from 1Click (not `/public/order`).
+- [x] Sell / send-₦X / rider withdraw create via `POST /requests` (`SENDRA_CENTIIV_SELL_USE_REQUESTS=1` default; set `0` for legacy `/public/order`).
 - [ ] Cron: `php src/scripts/cron_oneclick_onramp_poll.php`
 
 ---

@@ -113,7 +113,7 @@ class AuthController
     }
 
     /**
-     * Expose the User model to controllers that need it (e.g. MessageController).
+     * Expose the User model to controllers that need it (e.g. Kernel / PIN pages).
      */
     public function getUserModel(): User
     {

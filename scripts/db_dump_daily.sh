@@ -2,13 +2,10 @@
 set -euo pipefail
 
 # Daily MySQL dumps for Sendra (Aptos + Logistics).
-# - Creates date-stamped gzip files (safer than overwriting a single dump)
-# - Keeps credentials in environment (.env) rather than hardcoding
-#
 # Usage (cron):
-#   /var/www/html/coinectra/scripts/db_dump_daily.sh
+#   /var/www/sendra/app/scripts/db_dump_daily.sh
 
-ROOT_DIR="/var/www/html/coinectra"
+ROOT_DIR="/var/www/sendra/app"
 ENV_FILE="${ROOT_DIR}/.env"
 
 if [[ -f "${ENV_FILE}" ]]; then
@@ -29,7 +26,7 @@ LOGISTICS_DB_USER="${LOGISTICS_DB_USER:-developer}"
 LOGISTICS_DB_PASS="${LOGISTICS_DB_PASS:-}"
 
 BACKUP_DIR="${SENDRA_DB_BACKUP_DIR:-/var/backups/sendra/mysql}"
-RETENTION_DAYS="${SENDRA_DB_BACKUP_RETENTION_DAYS:-14}"
+RETENTION_DAYS="${SENDRA_DB_BACKUP_RETENTION_DAYS:-183}"
 
 umask 077
 mkdir -p "${BACKUP_DIR}"
@@ -43,8 +40,6 @@ dump_one () {
   local pass="$4"
   local out="${BACKUP_DIR}/${name}_${ts}.sql.gz"
 
-  # Use --single-transaction for InnoDB consistency without locking tables.
-  # Use MYSQL_PWD to avoid putting password in process args.
   MYSQL_PWD="${pass}" mysqldump \
     --host="${host}" \
     --user="${user}" \
@@ -53,14 +48,18 @@ dump_one () {
     --events \
     --triggers \
     --set-gtid-purged=OFF \
+    --no-tablespaces \
     "${name}" | gzip -9 > "${out}"
 
   echo "Wrote ${out}"
 }
 
 dump_one "${APTOS_DB_HOST}" "${APTOS_DB_NAME}" "${APTOS_DB_USER}" "${APTOS_DB_PASS}"
-dump_one "${LOGISTICS_DB_HOST}" "${LOGISTICS_DB_NAME}" "${LOGISTICS_DB_USER}" "${LOGISTICS_DB_PASS}"
 
-# Prune old dumps (keep last N days)
+if MYSQL_PWD="${LOGISTICS_DB_PASS}" mysql --host="${LOGISTICS_DB_HOST}" --user="${LOGISTICS_DB_USER}" -e "USE \`${LOGISTICS_DB_NAME}\`;" &>/dev/null; then
+  dump_one "${LOGISTICS_DB_HOST}" "${LOGISTICS_DB_NAME}" "${LOGISTICS_DB_USER}" "${LOGISTICS_DB_PASS}"
+else
+  echo "Skipping logistics dump: database '${LOGISTICS_DB_NAME}' not reachable."
+fi
+
 find "${BACKUP_DIR}" -type f -name '*.sql.gz' -mtime +"${RETENTION_DAYS}" -delete
-

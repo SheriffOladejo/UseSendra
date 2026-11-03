@@ -28,5 +28,6 @@ return array(
     'Dotenv\\' => array($vendorDir . '/vlucas/phpdotenv/src'),
     'DASPRiD\\Enum\\' => array($vendorDir . '/dasprid/enum/src'),
     'BaconQrCode\\' => array($vendorDir . '/bacon/bacon-qr-code/src'),
+    'AptosV2\\' => array($baseDir . '/aptos-v2/src'),
     'App\\' => array($baseDir . '/src'),
 );

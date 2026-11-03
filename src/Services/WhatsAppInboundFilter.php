@@ -40,8 +40,10 @@ final class WhatsAppInboundFilter
             'swapping *',
             'enter your 6-digit pin',
             'getting a rate for',
+            'getting a rate',
             'getting a *',
             'getting the best rate',
+            'still getting your rate',
             'sorry, i didn\'t understand',
             'transaction is already processing',
             'that transaction is already',
@@ -57,6 +59,8 @@ final class WhatsAppInboundFilter
             'summary:',
             'received *',
             'on *aptos*',
+            'crypto received',
+            'is in your sendra wallet',
         ];
 
         foreach ($needles as $needle) {
@@ -106,7 +110,7 @@ final class WhatsAppInboundFilter
                 "SELECT tx_type, status, human_description
                  FROM pending_transactions
                  WHERE user_phone = ?
-                   AND tx_type IN ('offramp_panora_oneclick_centiiv', 'offramp_oneclick_centiiv', 'offramp_centiiv')
+                   AND tx_type IN ('offramp_panora_oneclick_centiiv', 'offramp_oneclick_centiiv', 'offramp_centiiv', 'offramp_daya_aptos', 'offramp_stellar_centiiv', 'offramp_arc_centiiv')
                    AND status = 'pending'
                    AND created_at > DATE_SUB(NOW(), INTERVAL 20 MINUTE)
                  ORDER BY created_at DESC
@@ -136,6 +140,9 @@ final class WhatsAppInboundFilter
             'offramp_panora_oneclick_centiiv',
             'offramp_oneclick_centiiv',
             'offramp_centiiv',
+            'offramp_daya_aptos',
+            'offramp_stellar_centiiv',
+            'offramp_arc_centiiv',
         ];
         if (!in_array($txType, $offrampTypes, true)) {
             return false;

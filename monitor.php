@@ -160,5 +160,20 @@ if ($curlErr || $healthCode !== 200) {
     );
 }
 
+// ── Check 5: arc-service health ──────────────────────────────────────────────
+$ch = curl_init('http://127.0.0.1:3003/health');
+curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 5]);
+$arcHealthResponse = curl_exec($ch);
+$arcHealthCode     = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+$arcCurlErr        = curl_errno($ch);
+curl_close($ch);
+
+if ($arcCurlErr || $arcHealthCode !== 200) {
+    alert($whatsappService, $ADMIN_PHONE,
+        "arc-service Down",
+        "Health check failed — HTTP {$arcHealthCode}. Arc sends, sells, and wallet creation will not process until the service is restarted.\n\nRun: pm2 restart arc-service"
+    );
+}
+
 $timestamp = date('Y-m-d H:i:s');
 echo "{$timestamp} — Monitor run complete. Alerts fired: {$alertCount}\n";

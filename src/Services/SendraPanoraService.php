@@ -189,6 +189,33 @@ final class SendraPanoraService
     }
 
     /**
+     * Quote USDT→USDC for a target USDC amount. Tries exact-out first, then exact-in estimate on rate limits.
+     *
+     * @return array{success: bool, http_code: int, data: array<string, mixed>, raw: ?string, error: ?string}
+     */
+    public function requestSwapQuoteForTargetUsdc(string $targetUsdcStr, string $toWalletAddress0x): array
+    {
+        $out = $this->requestSwapQuoteExactOut($targetUsdcStr, $toWalletAddress0x);
+        if ($out['success']) {
+            return $out;
+        }
+        $http = (int) ($out['http_code'] ?? 0);
+        if ($http !== 429 && $http !== 503) {
+            return $out;
+        }
+        $targetUsdc = (float) $targetUsdcStr;
+        if ($targetUsdc <= 0) {
+            return $out;
+        }
+        $usdtGuess = rtrim(rtrim(number_format($targetUsdc * 1.008, 6, '.', ''), '0'), '.');
+        if ($usdtGuess === '') {
+            $usdtGuess = (string) round($targetUsdc * 1.008, 6);
+        }
+
+        return $this->requestSwapQuote($usdtGuess, $toWalletAddress0x);
+    }
+
+    /**
      * Exact-out: target USDC in user wallet → minimum USDT in (Panora supports toTokenAmount).
      *
      * @return array{success: bool, http_code: int, data: array<string, mixed>, raw: ?string, error: ?string}
@@ -336,58 +363,71 @@ final class SendraPanoraService
     private function postJson(string $path, array $body): array
     {
         $url = $this->baseUrl . $path;
-        $ch = curl_init($url);
-        if ($ch === false) {
-            return $this->err('curl_init failed', 0);
-        }
         $payload = json_encode($body, JSON_UNESCAPED_SLASHES);
-        curl_setopt_array($ch, [
-            CURLOPT_POST => true,
-            CURLOPT_POSTFIELDS => $payload,
-            CURLOPT_HTTPHEADER => [
-                'Content-Type: application/json',
-                'Accept: application/json',
-                'x-api-key: ' . $this->apiKey,
-            ],
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT => 45,
-        ]);
-        $raw = curl_exec($ch);
-        $http = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $curlErr = curl_errno($ch) ? curl_error($ch) : null;
-        curl_close($ch);
-        if ($curlErr !== null) {
-            return $this->err('Panora request failed: ' . $curlErr, $http);
-        }
-        $data = json_decode((string) $raw, true);
-        if (!is_array($data)) {
-            return [
-                'success' => false,
-                'http_code' => $http,
-                'data' => [],
-                'raw' => is_string($raw) ? $raw : null,
-                'error' => 'Invalid JSON from Panora',
-            ];
-        }
-        if ($http < 200 || $http >= 300) {
-            $msg = isset($data['message']) && is_string($data['message']) ? $data['message'] : (isset($data['error']) && is_string($data['error']) ? $data['error'] : 'Panora HTTP ' . $http);
+        $maxAttempts = max(1, (int) ($_ENV['SENDRA_PANORA_QUOTE_RETRIES'] ?? getenv('SENDRA_PANORA_QUOTE_RETRIES') ?: 3));
+        $last = null;
 
-            return [
-                'success' => false,
-                'http_code' => $http,
-                'data' => $data,
-                'raw' => is_string($raw) ? $raw : null,
-                'error' => $msg,
-            ];
+        for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
+            $ch = curl_init($url);
+            if ($ch === false) {
+                return $this->err('curl_init failed', 0);
+            }
+            curl_setopt_array($ch, [
+                CURLOPT_POST => true,
+                CURLOPT_POSTFIELDS => $payload,
+                CURLOPT_HTTPHEADER => [
+                    'Content-Type: application/json',
+                    'Accept: application/json',
+                    'x-api-key: ' . $this->apiKey,
+                ],
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_TIMEOUT => 45,
+            ]);
+            $raw = curl_exec($ch);
+            $http = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $curlErr = curl_errno($ch) ? curl_error($ch) : null;
+            curl_close($ch);
+            if ($curlErr !== null) {
+                $last = $this->err('Panora request failed: ' . $curlErr, $http);
+            } else {
+                $data = json_decode((string) $raw, true);
+                if (!is_array($data)) {
+                    $last = [
+                        'success' => false,
+                        'http_code' => $http,
+                        'data' => [],
+                        'raw' => is_string($raw) ? $raw : null,
+                        'error' => 'Invalid JSON from Panora',
+                    ];
+                } elseif ($http < 200 || $http >= 300) {
+                    $msg = isset($data['message']) && is_string($data['message']) ? $data['message'] : (isset($data['error']) && is_string($data['error']) ? $data['error'] : 'Panora HTTP ' . $http);
+                    $last = [
+                        'success' => false,
+                        'http_code' => $http,
+                        'data' => $data,
+                        'raw' => is_string($raw) ? $raw : null,
+                        'error' => $msg,
+                    ];
+                } else {
+                    return [
+                        'success' => true,
+                        'http_code' => $http,
+                        'data' => $data,
+                        'raw' => is_string($raw) ? $raw : null,
+                        'error' => null,
+                    ];
+                }
+            }
+
+            $retryable = in_array($last['http_code'], [429, 503, 502, 504], true);
+            if (!$retryable || $attempt >= $maxAttempts) {
+                break;
+            }
+            $delayMs = min(8000, 1200 * (2 ** ($attempt - 1)));
+            usleep($delayMs * 1000);
         }
 
-        return [
-            'success' => true,
-            'http_code' => $http,
-            'data' => $data,
-            'raw' => is_string($raw) ? $raw : null,
-            'error' => null,
-        ];
+        return $last ?? $this->err('Panora request failed', 0);
     }
 
     /**

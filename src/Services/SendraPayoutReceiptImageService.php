@@ -32,7 +32,8 @@ final class SendraPayoutReceiptImageService
     private static function estimateHeight(
         string $ref,
         string $font,
-        int $innerW
+        int $innerW,
+        bool $includeTransactionFee = false
     ): int {
         $contentW = max(80, $innerW);
         $refLines = count(self::wrapToWidth($ref, $font, 12, $contentW - self::LABEL_COL_W - 8));
@@ -44,7 +45,8 @@ final class SendraPayoutReceiptImageService
         $yy += 14;  // gap
         $yy += self::HERO_H;
         $yy += 22;  // after hero
-        $yy += 28 + 36 * 2 + 24; // transaction summary
+        $summaryRows = 2 + ($includeTransactionFee ? 1 : 0);
+        $yy += 28 + 36 * $summaryRows + 24; // transaction summary
         $yy += 28 + 36 * 3 + 24; // receiver
         $yy += 36 * 2 + 24 + $refLines * 26; // sender + ref
         $yy += 30;  // date
@@ -59,7 +61,9 @@ final class SendraPayoutReceiptImageService
      */
     public static function renderToTempFile(array $model): ?string
     {
-        if (SendraPayoutReceiptHtmlRenderer::isEnabled()) {
+        $isBuy = strtolower(trim((string) ($model['receipt_kind'] ?? ''))) === 'buy';
+
+        if (!$isBuy && SendraPayoutReceiptHtmlRenderer::isEnabled()) {
             $htmlPath = SendraPayoutReceiptHtmlRenderer::renderToTempFile($model);
             if ($htmlPath !== null) {
                 return $htmlPath;
@@ -84,7 +88,7 @@ final class SendraPayoutReceiptImageService
         $bankName      = trim((string) ($model['bank_name']     ?? ''));
         $accountName   = trim((string) ($model['account_name']  ?? ($model['recipient'] ?? '—')));
         $accountNumber = trim((string) ($model['account_number'] ?? ''));
-        $senderName    = trim((string) ($model['sender_name']   ?? 'Nomba Financial Services'));
+        $senderName    = trim((string) ($model['sender_name']   ?? 'UseSendra LTD/Centiiv'));
 
         $tx        = (string) ($model['transaction_id'] ?? '—');
         $when      = (string) ($model['completed_at']   ?? '');
@@ -92,8 +96,9 @@ final class SendraPayoutReceiptImageService
         $bridge    = trim((string) ($model['bridge_note']  ?? ''));
 
         $amt = $model['amount_ngn'] ?? null;
+        $fiatCurrency = SendraCentiivPayoutReceiptFactory::receiptFiatCurrency($model);
         $amountStr = is_numeric($amt)
-            ? self::formatNgnHeroAmount((float) $amt)
+            ? self::formatFiatHeroAmount((float) $amt, $fiatCurrency)
             : '—';
 
         $withdrawAsset = strtoupper(trim((string) ($model['withdraw_asset'] ?? 'USDC')));
@@ -104,9 +109,14 @@ final class SendraPayoutReceiptImageService
 
         $conversionRate = trim((string) ($model['conversion_rate'] ?? ''));
         if ($conversionRate === '' && is_numeric($withdrawAmt) && is_numeric($amt) && (float) $withdrawAmt > 0) {
-            $conversionRate = '₦' . number_format((float) $amt / (float) $withdrawAmt, 2, '.', ',');
+            $fiatCurrency = SendraCentiivPayoutReceiptFactory::receiptFiatCurrency($model);
+            $conversionRate = SendraCentiivPayoutReceiptFactory::fiatCurrencySymbol($fiatCurrency)
+                . number_format((float) $amt / (float) $withdrawAmt, 2, '.', ',');
         }
         $conversionRate = self::conversionRateNgnOnly($conversionRate);
+
+        $transactionFeeStr = SendraCentiivPayoutReceiptFactory::formatTransactionFeeDisplay($model) ?? '';
+        $hasTransactionFee = $transactionFeeStr !== '';
 
         $innerW   = self::WIDTH - self::PAD * 2;
         $whenDisp = $when !== ''
@@ -121,7 +131,7 @@ final class SendraPayoutReceiptImageService
             }
         }
 
-        $height = self::estimateHeight($refValue, $font, $innerW);
+        $height = self::estimateHeight($refValue, $font, $innerW, $hasTransactionFee);
 
         $im = imagecreatetruecolor(self::WIDTH, $height);
         if ($im === false) {
@@ -139,7 +149,6 @@ final class SendraPayoutReceiptImageService
         $cWhite      = self::color($im, 255, 255, 255);
         $cHeroLabel  = self::color($im, 184, 212, 203);
         $cLogoTeal   = self::color($im, 46,  178, 140);
-        $cUsdcBlue   = self::color($im, 39,  117, 202);
         $cPattern    = imagecolorallocatealpha($im, 255, 255, 255, 108);
 
         imagefilledrectangle($im, 0, 0, self::WIDTH, $height, $cBg);
@@ -159,8 +168,13 @@ final class SendraPayoutReceiptImageService
         }
         $yy += $markH + 12;
 
+        $receiptTitle = $isBuy ? 'Buy receipt' : 'Withdrawal receipt';
+        $heroLabel    = $isBuy ? 'You paid:' : 'You withdrew:';
+        $cryptoRowLbl = $isBuy ? 'Crypto received:' : 'Amount (USD):';
+        $recvSection  = $isBuy ? 'Payment account (deposit)' : "Receiver's details";
+
         // ── Title ────────────────────────────────────────────────────────────
-        self::ttfCenter($im, $fontBold, 20, $cBrand, (int) (self::WIDTH / 2), (int) ($yy + 18), 'Withdrawal receipt');
+        self::ttfCenter($im, $fontBold, 20, $cBrand, (int) (self::WIDTH / 2), (int) ($yy + 18), $receiptTitle);
         $yy += 34;
 
         // ── Hero card ────────────────────────────────────────────────────────
@@ -172,7 +186,7 @@ final class SendraPayoutReceiptImageService
         self::filledRoundRect($im, $cardX1, $cardY1, $cardX2, $cardY2, self::HERO_RADIUS, $cBrand);
         self::drawHeroPattern($im, $cardX1, $cardY1, $cardX2, $cardY2, $cPattern);
 
-        self::ttfCenter($im, $font, 12, $cHeroLabel, (int) (self::WIDTH / 2), $cardY1 + 30, 'You withdrew:');
+        self::ttfCenter($im, $font, 12, $cHeroLabel, (int) (self::WIDTH / 2), $cardY1 + 30, $heroLabel);
 
         $heroSize = strlen($amountStr) > 12 ? 34 : 40;
         self::ttfCenter($im, $fontBold, (float) $heroSize, $cWhite, (int) (self::WIDTH / 2), $cardY2 - 22, $amountStr);
@@ -185,17 +199,23 @@ final class SendraPayoutReceiptImageService
 
         $yy = (float) self::kvRowWithIcon(
             $im, $font, $fontBold, $ix, (int) $yy, $iw,
-            'Amount (USD):', $withdrawStr, $cLabel, $cBrand, $cUsdcBlue, $cWhite
+            $cryptoRowLbl, $withdrawStr, $cLabel, $cBrand, $withdrawAsset
         );
         $yy = (float) self::kvRow(
             $im, $font, $fontBold, $ix, (int) $yy, $iw,
             'Conversion rate:', $conversionRate, $cLabel, $cBrand
         );
+        if ($hasTransactionFee) {
+            $yy = (float) self::kvRow(
+                $im, $font, $fontBold, $ix, (int) $yy, $iw,
+                'Transaction fees:', $transactionFeeStr, $cLabel, $cBrand
+            );
+        }
         self::dottedHLine($im, $ix, (int) $yy, $ix + $iw, $cDivider);
         $yy += 24;
 
-        // ── Receiver's details ─────────────────────────────────────────────
-        self::ttf($im, $fontBold, 14, $cHeading, $ix, (int) $yy, "Receiver's details");
+        // ── Bank / payment account ─────────────────────────────────────────
+        self::ttf($im, $fontBold, 14, $cHeading, $ix, (int) $yy, $recvSection);
         $yy += 28;
 
         $bn  = $bankName      !== '' ? $bankName      : '—';
@@ -208,8 +228,11 @@ final class SendraPayoutReceiptImageService
         self::dottedHLine($im, $ix, (int) $yy, $ix + $iw, $cDivider);
         $yy += 24;
 
-        $yy = (float) self::kvRow($im, $font, $fontBold, $ix, (int) $yy, $iw, 'Sender:', $senderName !== '' ? $senderName : 'Nomba Financial Services', $cLabel, $cBrand);
-        $yy = (float) self::kvRowWrapped($im, $font, $fontBold, $ix, (int) $yy, $iw, 'Reference:', $refValue, $cLabel, $cBrand);
+        if (!$isBuy) {
+            $yy = (float) self::kvRow($im, $font, $fontBold, $ix, (int) $yy, $iw, 'Sender:', $senderName !== '' ? $senderName : SendraCentiivPayoutReceiptFactory::resolveReceiptSenderLabel(false), $cLabel, $cBrand);
+        }
+        $refLabel = $isBuy ? 'Order reference:' : 'Reference:';
+        $yy = (float) self::kvRowWrapped($im, $font, $fontBold, $ix, (int) $yy, $iw, $refLabel, $refValue, $cLabel, $cBrand);
         self::dottedHLine($im, $ix, (int) $yy, $ix + $iw, $cDivider);
         $yy += 24;
 
@@ -228,6 +251,272 @@ final class SendraPayoutReceiptImageService
         imagedestroy($im);
 
         return $path;
+    }
+
+    /**
+     * @param array<string, mixed> $model From {@see SendraCentiivBuyReceiptFactory::buildFromOnrampMeta()}
+     */
+    public static function renderBuyToTempFile(array $model): ?string
+    {
+        if (SendraPayoutReceiptHtmlRenderer::isEnabled()) {
+            $htmlPath = SendraPayoutReceiptHtmlRenderer::renderBuyToTempFile($model);
+            if ($htmlPath !== null) {
+                return $htmlPath;
+            }
+            error_log('SendraPayoutReceiptImageService: buy HTML renderer failed, falling back to GD');
+        }
+
+        $mapped = array_merge($model, [
+            'receipt_kind' => 'buy',
+            'withdraw_asset' => $model['receive_asset'] ?? 'USDC',
+            'withdraw_amount' => $model['receive_amount'] ?? null,
+            'sender_name' => '',
+            'bridge_note' => trim((string) ($model['oneclick_reference'] ?? '')),
+            'session_id' => '',
+        ]);
+
+        return self::renderToTempFile($mapped);
+    }
+
+    /**
+     * @param array<string, mixed> $model From {@see SendraRateCardFactory::build()}
+     */
+    public static function renderRatesToTempFile(array $model): ?string
+    {
+        // Prefer GD on this host: snap Chromium cannot run as www-data (no /var/www/snap).
+        // Opt into HTML only when SENDRA_RATE_CARD_USE_HTML=1 and Chromium is actually usable.
+        $tryHtml = in_array(strtolower(trim((string) ($_ENV['SENDRA_RATE_CARD_USE_HTML'] ?? getenv('SENDRA_RATE_CARD_USE_HTML') ?: ''))), ['1', 'true', 'yes', 'on'], true);
+        if ($tryHtml) {
+            $htmlPath = SendraPayoutReceiptHtmlRenderer::renderRatesToTempFile($model);
+            if ($htmlPath !== null) {
+                return $htmlPath;
+            }
+            error_log('SendraPayoutReceiptImageService: rate card HTML renderer failed, falling back to GD');
+        }
+
+        return self::renderRatesGd($model);
+    }
+
+    /**
+     * @param array<string, mixed> $model
+     */
+    private static function renderRatesGd(array $model): ?string
+    {
+        if (!extension_loaded('gd')) {
+            error_log('SendraPayoutReceiptImageService: PHP GD extension required for rate card');
+
+            return null;
+        }
+        $font = self::resolveFontPath();
+        if ($font === null) {
+            error_log('SendraPayoutReceiptImageService: no TTF font found for rate card');
+
+            return null;
+        }
+        $fontBold = self::resolveFontBoldPath($font) ?? $font;
+        $rows = $model['rows'] ?? [];
+        if (!is_array($rows) || $rows === []) {
+            return null;
+        }
+
+        $width = self::WIDTH;
+        $pad = 22;
+        $rowH = 58;
+        $rowGap = 10;
+        $headerH = 118;
+        $colsH = 28;
+        $footerH = 52;
+        $height = $pad + $headerH + $colsH + (count($rows) * ($rowH + $rowGap)) + $footerH + 8;
+
+        $im = imagecreatetruecolor($width, $height);
+        if ($im === false) {
+            return null;
+        }
+        imagealphablending($im, true);
+        imagesavealpha($im, true);
+
+        $cBg = self::color($im, 238, 241, 238);
+        $cBrand = self::color($im, 22, 60, 50);
+        $cAccent = self::color($im, 46, 178, 140);
+        $cPill = self::color($im, 227, 232, 228);
+        $cSpeck = self::color($im, 197, 205, 200);
+        $cFooter = self::color($im, 110, 118, 128);
+
+        imagefilledrectangle($im, 0, 0, $width, $height, $cBg);
+        for ($y = 2; $y < $height; $y += 7) {
+            for ($x = 2; $x < $width; $x += 7) {
+                imagesetpixel($im, $x + (($y / 7) % 2 === 0 ? 0 : 3), $y, $cSpeck);
+            }
+        }
+
+        $logoH = 22;
+        if (self::drawSendraLogoImage($im, $pad, $pad + 4, $logoH) === null) {
+            self::drawSendraLogoMark($im, $pad, $pad + 4, 20, $cAccent, $cBrand);
+        }
+
+        $titleY = $pad + $logoH + 38;
+        self::ttf($im, $fontBold, 26, $cBrand, $pad, $titleY, 'Sendra');
+        $rateW = self::textPixelWidth($fontBold, 26, 'Rate ');
+        self::ttf($im, $fontBold, 26, $cBrand, $pad, $titleY + 34, 'Rate ');
+        self::ttf($im, $fontBold, 26, $cAccent, $pad + $rateW, $titleY + 34, 'Card');
+
+        $date = (string) ($model['date_label'] ?? '');
+        $dateW = self::textPixelWidth($fontBold, 9, $date);
+        self::ttf($im, $fontBold, 9, $cAccent, $width - $pad - $dateW, $pad + 22, $date);
+
+        $yy = $pad + $headerH;
+        $pairX = $pad + 16;
+        $buyColR = $width - $pad - 108;
+        $sellColR = $width - $pad - 16;
+        self::ttf($im, $fontBold, 10, $cAccent, $pairX, $yy, 'PAIRS');
+        $buyLabelW = self::textPixelWidth($fontBold, 10, 'BUY');
+        $sellLabelW = self::textPixelWidth($fontBold, 10, 'SELL');
+        self::ttf($im, $fontBold, 10, $cAccent, $buyColR - $buyLabelW, $yy, 'BUY');
+        self::ttf($im, $fontBold, 10, $cAccent, $sellColR - $sellLabelW, $yy, 'SELL');
+        $yy += 16;
+
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $y1 = (int) $yy;
+            $y2 = $y1 + $rowH;
+            self::filledRoundRect($im, $pad, $y1, $width - $pad, $y2, 18, $cPill);
+
+            $cx1 = $pad + 22;
+            $cx2 = $pad + 38;
+            $cy = $y1 + (int) ($rowH / 2);
+            $left = strtoupper((string) ($row['left'] ?? ''));
+            $right = strtoupper((string) ($row['right'] ?? 'USDC'));
+            $leftKind = (string) ($row['left_kind'] ?? 'flag');
+            if ($leftKind === 'coin') {
+                self::drawRateCoin($im, $cx1, $cy, 26, $left);
+            } else {
+                self::drawRateFlag($im, $cx1, $cy, 26, $left);
+            }
+            self::drawRateCoin($im, $cx2, $cy, 26, $right);
+
+            $pair = (string) ($row['pair'] ?? '');
+            self::ttf($im, $fontBold, 13, $cBrand, $pad + 56, $cy + 5, $pair);
+
+            $buy = (string) ($row['buy_display'] ?? '—');
+            $sell = (string) ($row['sell_display'] ?? '—');
+            $buyW = self::textPixelWidth($fontBold, 13, $buy);
+            $sellW = self::textPixelWidth($fontBold, 13, $sell);
+            self::ttf($im, $fontBold, 13, $cBrand, $buyColR - $buyW, $cy + 5, $buy);
+            self::ttf($im, $fontBold, 13, $cBrand, $sellColR - $sellW, $cy + 5, $sell);
+
+            $yy += $rowH + $rowGap;
+        }
+
+        $footer = 'usesendra.com';
+        $fw = self::textPixelWidth($font, 12, $footer);
+        $fx = (int) (($width - $fw) / 2);
+        $fy = $height - 28;
+        self::ttf($im, $font, 12, $cFooter, $fx, $fy, $footer);
+        imageline($im, $fx, $fy + 4, $fx + $fw, $fy + 4, $cFooter);
+
+        $path = sys_get_temp_dir() . '/sendra_rate_card_' . bin2hex(random_bytes(8)) . '.png';
+        if (!imagepng($im, $path, 6)) {
+            imagedestroy($im);
+
+            return null;
+        }
+        imagedestroy($im);
+
+        return $path;
+    }
+
+    private static function drawRateFlag(\GdImage $im, int $cx, int $cy, int $d, string $code): void
+    {
+        $code = strtoupper($code);
+        $palette = match ($code) {
+            'NGN' => [[0, 135, 81], [255, 255, 255], [0, 135, 81]],
+            'GHS' => [[206, 17, 38], [252, 209, 22], [0, 107, 63]],
+            'KES' => [[0, 0, 0], [187, 0, 0], [0, 102, 0]],
+            'ZAR' => [[0, 119, 73], [222, 56, 49], [0, 35, 149]],
+            'XOF' => [[247, 127, 0], [255, 255, 255], [0, 158, 96]],
+            'XAF' => [[0, 122, 94], [206, 17, 38], [252, 209, 22]],
+            'ETB' => [[7, 137, 48], [252, 209, 22], [218, 18, 26]],
+            'UGX' => [[0, 0, 0], [252, 220, 4], [217, 0, 0]],
+            'EGP' => [[206, 17, 38], [255, 255, 255], [0, 0, 0]],
+            default => [[15, 62, 46], [46, 178, 140], [15, 62, 46]],
+        };
+        $tmp = imagecreatetruecolor($d, $d);
+        if ($tmp === false) {
+            return;
+        }
+        imagealphablending($tmp, false);
+        imagesavealpha($tmp, true);
+        $clear = imagecolorallocatealpha($tmp, 0, 0, 0, 127);
+        imagefill($tmp, 0, 0, $clear);
+        imagealphablending($tmp, true);
+        $vertical = in_array($code, ['NGN', 'XOF', 'XAF'], true);
+        $w = (int) ceil($d / 3);
+        for ($i = 0; $i < 3; $i++) {
+            $c = imagecolorallocate($tmp, $palette[$i][0], $palette[$i][1], $palette[$i][2]);
+            if ($vertical) {
+                imagefilledrectangle($tmp, $i * $w, 0, ($i === 2 ? $d : ($i + 1) * $w), $d, $c);
+            } else {
+                imagefilledrectangle($tmp, 0, $i * $w, $d, ($i === 2 ? $d : ($i + 1) * $w), $c);
+            }
+        }
+        self::pasteCircle($im, $tmp, $cx - (int) ($d / 2), $cy - (int) ($d / 2), $d);
+        imagedestroy($tmp);
+    }
+
+    private static function drawRateCoin(\GdImage $im, int $cx, int $cy, int $d, string $asset): void
+    {
+        $asset = strtoupper($asset);
+        $file = $asset === 'USDT' || $asset === 'USDT0'
+            ? dirname(__DIR__, 2) . '/assets/images/usdt.png'
+            : dirname(__DIR__, 2) . '/assets/images/usdc.png';
+        $src = is_readable($file) ? @imagecreatefrompng($file) : false;
+        $tmp = imagecreatetruecolor($d, $d);
+        if ($tmp === false) {
+            return;
+        }
+        imagealphablending($tmp, false);
+        imagesavealpha($tmp, true);
+        $clear = imagecolorallocatealpha($tmp, 0, 0, 0, 127);
+        imagefill($tmp, 0, 0, $clear);
+        imagealphablending($tmp, true);
+        if ($src !== false) {
+            imagecopyresampled($tmp, $src, 0, 0, 0, 0, $d, $d, imagesx($src), imagesy($src));
+            imagedestroy($src);
+        } else {
+            $fill = imagecolorallocate($tmp, $asset === 'USDT' ? 38 : 39, $asset === 'USDT' ? 161 : 117, $asset === 'USDT' ? 123 : 202);
+            imagefilledellipse($tmp, (int) ($d / 2), (int) ($d / 2), $d, $d, $fill);
+        }
+        self::pasteCircle($im, $tmp, $cx - (int) ($d / 2), $cy - (int) ($d / 2), $d);
+        imagedestroy($tmp);
+    }
+
+    private static function pasteCircle(\GdImage $dest, \GdImage $src, int $x, int $y, int $d): void
+    {
+        $mask = imagecreatetruecolor($d, $d);
+        if ($mask === false) {
+            imagecopy($dest, $src, $x, $y, 0, 0, $d, $d);
+
+            return;
+        }
+        imagealphablending($mask, false);
+        imagesavealpha($mask, true);
+        $transparent = imagecolorallocatealpha($mask, 0, 0, 0, 127);
+        $opaque = imagecolorallocatealpha($mask, 255, 255, 255, 0);
+        imagefill($mask, 0, 0, $transparent);
+        imagefilledellipse($mask, (int) ($d / 2), (int) ($d / 2), $d - 1, $d - 1, $opaque);
+        for ($yy = 0; $yy < $d; $yy++) {
+            for ($xx = 0; $xx < $d; $xx++) {
+                $a = (imagecolorat($mask, $xx, $yy) >> 24) & 0x7F;
+                if ($a > 60) {
+                    continue;
+                }
+                $col = imagecolorat($src, $xx, $yy);
+                imagesetpixel($dest, $x + $xx, $y + $yy, $col);
+            }
+        }
+        imagedestroy($mask);
     }
 
     private static function kvRow(
@@ -273,8 +562,7 @@ final class SendraPayoutReceiptImageService
         string $v,
         int $cK,
         int $cV,
-        int $cBlue,
-        int $cWhite
+        string $asset
     ): int {
         $labelSize = 13;
         $valueSize = 13;
@@ -296,7 +584,7 @@ final class SendraPayoutReceiptImageService
             if ($i === 0) {
                 $iconCx = $vx - $iconGap - $iconR;
                 $iconCy = (int) ($yLine - (int) ($valueSize * 0.52));
-                self::drawUsdcIcon($im, $iconCx, $iconCy, $iconR, $cBlue, $cWhite);
+                self::drawCryptoAssetIcon($im, $iconCx, $iconCy, $iconR, $asset);
             }
             self::ttf($im, $fontBold, $valueSize, $cV, $vx, (int) $yLine, $ln);
             $yLine += $lineH;
@@ -334,6 +622,60 @@ final class SendraPayoutReceiptImageService
         }
 
         return (int) ($y2 + 14);
+    }
+
+    private static function cryptoIconPath(string $asset): ?string
+    {
+        $asset = strtoupper(trim($asset));
+        $base = dirname(__DIR__, 2) . '/assets/images/';
+        if ($asset === 'USDT') {
+            $path = $base . 'usdt.png';
+
+            return is_readable($path) ? $path : null;
+        }
+        if ($asset === 'USDC') {
+            $path = $base . 'usdc.png';
+
+            return is_readable($path) ? $path : null;
+        }
+
+        return null;
+    }
+
+    private static function drawCryptoAssetIcon(\GdImage $im, int $cx, int $cy, int $r, string $asset): void
+    {
+        $path = self::cryptoIconPath($asset);
+        $targetD = max(2, $r * 2);
+        if ($path !== null) {
+            $src = @imagecreatefrompng($path);
+            if ($src !== false) {
+                $sw = imagesx($src);
+                $sh = imagesy($src);
+                if ($sw >= 1 && $sh >= 1) {
+                    $dest = imagecreatetruecolor($targetD, $targetD);
+                    if ($dest !== false) {
+                        imagealphablending($dest, false);
+                        imagesavealpha($dest, true);
+                        $transparent = imagecolorallocatealpha($dest, 0, 0, 0, 127);
+                        imagefill($dest, 0, 0, $transparent);
+                        imagealphablending($dest, true);
+                        imagecopyresampled($dest, $src, 0, 0, 0, 0, $targetD, $targetD, $sw, $sh);
+                        imagecopy($im, $dest, $cx - $r, $cy - $r, 0, 0, $targetD, $targetD);
+                        imagedestroy($dest);
+                        imagedestroy($src);
+
+                        return;
+                    }
+                    imagedestroy($src);
+                } else {
+                    imagedestroy($src);
+                }
+            }
+        }
+
+        $cBlue = self::color($im, 39, 117, 202);
+        $cWhite = self::color($im, 255, 255, 255);
+        self::drawUsdcIcon($im, $cx, $cy, $r, $cBlue, $cWhite);
     }
 
     private static function drawUsdcIcon(\GdImage $im, int $cx, int $cy, int $r, int $cBlue, int $cWhite): void
@@ -392,6 +734,24 @@ final class SendraPayoutReceiptImageService
         return $value;
     }
 
+    private static function formatFiatHeroAmount(float $amount, string $currency): string
+    {
+        $currency = strtoupper(trim($currency));
+        $symbol   = SendraCentiivPayoutReceiptFactory::fiatCurrencySymbol($currency);
+        $noDecimals = in_array($currency, ['XOF', 'XAF', 'UGX', 'RWF', 'TZS', 'ETB'], true);
+        $whole = $noDecimals || abs($amount - round($amount)) < 0.005;
+        $numPart = $whole
+            ? number_format($amount, 0, '.', ',')
+            : number_format($amount, 2, '.', ',');
+        // CFA suffix pattern
+        if (strlen($symbol) > 1 && !in_array($symbol[0], ['₦', '₵', 'E', 'R', 'M', 'T', 'B', 'U'], true)) {
+            return $numPart . ' ' . $symbol;
+        }
+
+        return $symbol . ' ' . $numPart;
+    }
+
+    /** @deprecated Use formatFiatHeroAmount() */
     private static function formatNgnHeroAmount(float $ngn): string
     {
         $whole = abs($ngn - round($ngn)) < 0.005;

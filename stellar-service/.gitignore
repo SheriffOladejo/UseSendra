@@ -1,0 +1,7 @@
+node_modules/
+.stellar/
+.env
+.env.operator
+.operator-hot-wallet.json
+.user-c-test-mainnet.json
+*.toml

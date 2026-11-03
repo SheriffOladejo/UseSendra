@@ -22,10 +22,13 @@ $botConfigs = require __DIR__ . '/config/Bots.php';
 
 use App\Controllers\AuthController;
 use App\Controllers\LogisticsAuthController;
-use App\Controllers\MessageController;
+use App\Services\SendraIndexerDepositNotifyService;
 use App\Services\WebhookAuthService;
 use App\Services\WhatsAppInboundFilter;
 use App\Services\WhatsAppService;
+use AptosV2\Bootstrap\Kernel;
+use AptosV2\Bootstrap\PinConfirmBootstrap;
+use AptosV2\Support\PendingWhatsAppNoticeService;
 
 $VERIFY_TOKEN = $_ENV['WHATSAPP_VERIFY_TOKEN'] ?? getenv('WHATSAPP_VERIFY_TOKEN') ?: '';
 $ACCESS_TOKEN = $_ENV['WHATSAPP_ACCESS_TOKEN'] ?? getenv('WHATSAPP_ACCESS_TOKEN') ?: '';
@@ -57,22 +60,21 @@ $db = Database::getInstance($botConfig['db_config'], useReplica:false)->getConne
 $whatsappService = new WhatsAppService($ACCESS_TOKEN, $incomingPhoneNumberId);
 
 $authController  = new AuthController($db, $whatsappService);
-$controllerClass = "App\\Controllers\\{$botConfig['controller']}";
 
-// Separate auth + message controllers
-if ($incomingPhoneNumberId === $SENDRA_LOGISTICS_PHONE_ID) {
-    // Logistics bot
+// Aptos WhatsApp always uses the v2 Kernel. Logistics stays on LogisticsMessageController
+// unless APTOS_V2_TEST_ON_LOGISTICS=1 (Kernel still talks to the Aptos DB).
+$aptosV2OnLogistics = ($_ENV['APTOS_V2_TEST_ON_LOGISTICS'] ?? getenv('APTOS_V2_TEST_ON_LOGISTICS')) ?: '0';
+$useAptosV2Kernel = $incomingPhoneNumberId === $SENDRA_APTOS_PHONE_ID
+    || ($incomingPhoneNumberId === $SENDRA_LOGISTICS_PHONE_ID
+        && in_array(strtolower((string) $aptosV2OnLogistics), ['1', 'true', 'yes', 'on'], true));
+
+if ($incomingPhoneNumberId === $SENDRA_LOGISTICS_PHONE_ID && !$useAptosV2Kernel) {
     $authController = new LogisticsAuthController($db, $whatsappService);
-    $messageControllerClass = "App\\Controllers\\LogisticsMessageController";
+    $messageController = new \App\Controllers\LogisticsMessageController($whatsappService, $authController, $db);
 } else {
-    // Default Aptos bot
     $authController = new AuthController($db, $whatsappService);
-    $messageControllerClass = "App\\Controllers\\{$botConfig['controller']}";
+    $messageController = Kernel::boot($whatsappService);
 }
-
-// FIXED: Old code: new MessageController($whatsappService, $db)
-//        New MessageController constructor requires AuthController as second param, not $db
-$messageController = new $controllerClass($whatsappService, $authController, $db);
 
 function sendJsonResponse($data, $statusCode = 200) {
     http_response_code($statusCode);
@@ -160,10 +162,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             sendJsonResponse(['success' => false, 'message' => 'Missing token or phone_number'], 400);
         }
 
-        $result = $messageController->executeVoucherClaim(
+        $result = PinConfirmBootstrap::createVoucherClaimService($incomingPhoneNumberId)->execute(
             $data['token'],
             $data['phone_number'],
-            $data['username'] ?? null   // ADD THIS
+            $data['username'] ?? null
         );
 
         sendJsonResponse($result, $result['success'] ? 200 : 400);
@@ -230,6 +232,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit;
     }
 
+    // Ack Meta immediately so slow handlers (quotes, on-chain) don't trigger retries
+    // that get swallowed by wamid dedup while the first request is still running.
+    http_response_code(200);
+    echo 'EVENT_RECEIVED';
+    if (function_exists('fastcgi_finish_request')) {
+        fastcgi_finish_request();
+    }
+
     foreach ($data['entry'] as $entry) {
         foreach ($entry['changes'] as $change) {
             $value = $change['value'] ?? [];
@@ -237,6 +247,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // FIXED: Old code crashed on status update payloads (delivered/read receipts)
             // because they don't have $msg['from'] — caused PHP notices and silent drops
             if (isset($value['statuses']) && !isset($value['messages'])) {
+                foreach ($value['statuses'] as $st) {
+                    if (!is_array($st)) {
+                        continue;
+                    }
+                    $err = $st['errors'][0] ?? null;
+                    error_log(
+                        'WEBHOOK: wa status recipient=' . ($st['recipient_id'] ?? '')
+                        . ' status=' . ($st['status'] ?? '')
+                        . ' id=' . ($st['id'] ?? '')
+                        . ($err ? ' error=' . json_encode($err) : '')
+                    );
+                    try {
+                        (new PendingWhatsAppNoticeService($db))->markFromStatus(
+                            (string) ($st['id'] ?? ''),
+                            (string) ($st['status'] ?? '')
+                        );
+                    } catch (\Throwable $e) {
+                        error_log('WEBHOOK: notice status update failed: ' . $e->getMessage());
+                    }
+                }
                 continue;
             }
 
@@ -253,10 +283,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $from = $msg['from'] ?? null;
                 if (!$from) continue;
 
+                $inboundWamid = isset($msg['id']) && is_string($msg['id']) ? trim($msg['id']) : null;
+                if ($inboundWamid !== null && $inboundWamid !== ''
+                    && !\App\Services\SendraWhatsAppInboundDedupService::claim($db, $inboundWamid, (string) $from)) {
+                    error_log('WEBHOOK: duplicate wamid skipped from=' . $from . ' id=' . $inboundWamid);
+                    continue;
+                }
+
+                if (in_array($incomingPhoneNumberId, [$SENDRA_APTOS_PHONE_ID, $SENDRA_LOGISTICS_PHONE_ID], true)) {
+                    \AptosV2\Support\WhatsAppBotResolver::touchLastInbound(
+                        $db,
+                        (string) $from,
+                        $incomingPhoneNumberId
+                    );
+                    try {
+                        (new PendingWhatsAppNoticeService($db))->flush((string) $from, $whatsappService);
+                    } catch (\Throwable $e) {
+                        error_log('WEBHOOK: notice flush failed: ' . $e->getMessage());
+                    }
+                }
+
                 // Determine message payload
                 if (isset($msg['text']['body'])) {
                     $rawBody = trim((string) $msg['text']['body']);
                     $messagePayload = strtolower($rawBody);
+                    error_log('WEBHOOK: inbound from=' . $from . ' body=' . substr($rawBody, 0, 80));
                     if (WhatsAppInboundFilter::isOutboundEchoMessage($msg, $messagePayload)) {
                         error_log('WEBHOOK: ignored outbound echo from=' . $from . ' body=' . substr($rawBody, 0, 80));
                         continue;
@@ -300,13 +351,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 $displayName = $userInfo['username'] ?? 'there';
 
-                $messageController->handleIncomingMessage($from, $messagePayload, $user, $displayName);
+                $messageController->handleIncomingMessage($from, $messagePayload, $user, $displayName, $inboundWamid);
             }
         }
     }
 
-    http_response_code(200);
-    echo "EVENT_RECEIVED";
     exit;
 }
 
@@ -332,29 +381,12 @@ function handleDepositNotification($data, $whatsappService) {
         sendJsonResponse(['success' => false, 'message' => 'No phone number provided'], 400);
     }
 
-    $shortSender = strlen($senderAddress) > 20
-        ? substr($senderAddress, 0, 6) . '...' . substr($senderAddress, -6)
-        : $senderAddress;
-
-    $shortHash = strlen($txHash) > 20
-        ? substr($txHash, 0, 10) . '...' . substr($txHash, -8)
-        : $txHash;
-
-    $suppressWa = $db && WhatsAppInboundFilter::shouldSuppressDepositWhatsAppNotify($db, $phoneNumber, $data);
-    if ($suppressWa) {
-        error_log("DEPOSIT NOTIFY: suppressed WhatsApp during off-ramp phone={$phoneNumber} amount={$amount} {$currency}");
+    if (!$db) {
+        error_log('DEPOSIT NOTIFY: no database connection');
+        sendJsonResponse(['success' => false, 'message' => 'Database unavailable'], 500);
     }
 
-    $message = "*💰 Crypto Deposit Notification*\n\n" .
-               "*Summary:*\nReceived *{$amount} {$currency}* on *{$network}*\n" .
-               "From: `{$shortSender}`\n\n" .
-               "*Transaction Hash:*\n`{$shortHash}`\n\n" .
-               ($explorerUrl ? "*View In Explorer:*\n{$explorerUrl}\n\n" : '') .
-               "✅ Your wallet has been credited successfully!";
-
-    $result = $suppressWa
-        ? ['success' => true, 'suppressed' => true]
-        : $whatsappService->sendMessage($phoneNumber, $message);
+    $result = SendraIndexerDepositNotifyService::handle($db, $whatsappService, $data);
 
     // ── Record deposit in transaction history ─────────────────────────────────
     if ($result['success'] && $db && $txHash !== 'unknown') {
@@ -362,12 +394,13 @@ function handleDepositNotification($data, $whatsappService) {
             // Use INSERT ... ON DUPLICATE KEY UPDATE with a no-op update
             // so duplicate tx_hash from the sender's 'out' record doesn't block this 'in' record.
             // The unique key must be (tx_hash, direction) — see migration note below.
+            $chain = \AptosV2\Support\ChainNetwork::resolve(null, (string) $explorerUrl);
             $stmt = $db->prepare("
                 INSERT INTO transaction_history
-                    (id, user_phone, direction, amount, currency, status,
+                    (id, user_phone, direction, amount, currency, chain, status,
                      aptos_address, counterparty, tx_hash, explorer_url, created_at)
                 VALUES
-                    (:id, :user_phone, 'in', :amount, :currency, 'confirmed',
+                    (:id, :user_phone, 'in', :amount, :currency, :chain, 'confirmed',
                      :aptos_address, :counterparty, :tx_hash, :explorer_url, NOW())
                 ON DUPLICATE KEY UPDATE id = id
             ");
@@ -376,6 +409,7 @@ function handleDepositNotification($data, $whatsappService) {
                 'user_phone'   => $phoneNumber,
                 'amount'       => $amount,
                 'currency'     => $currency,
+                'chain'        => $chain,
                 'aptos_address'=> $walletAddress,
                 'counterparty' => $senderAddress,
                 'tx_hash'      => $txHash,

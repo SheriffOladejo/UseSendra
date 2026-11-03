@@ -53,8 +53,10 @@ class StartStep extends BaseStep
             $this->whatsappService->sendMessage(
                 $phone,
                 "Sendra Logistics 📦\nHi {$disp} — what would you like to do?\n\n"
-                . "• Type *send* to ship a package\n"
+                . "• *shop* — buy from vendors (multi-store cart)\n"
+                . "• *send* — ship a package\n"
                 . "• *order* to track\n"
+                . "• *sell* — list products as a vendor\n"
                 . "• *help* for support\n"
                 . "• *history* for past orders\n"
                 . "• *restart* if you're stuck on an old offer or search\n"

@@ -304,22 +304,20 @@ final class SendraRampHealthService
         if (!$oneClick->isConfigured()) {
             return ['ok' => true, 'skipped' => true, 'note' => 'SENDRA_ONECLICK_JWT unset'];
         }
-        $stellar = trim((string) ($_ENV['SENDRA_CENTIIV_STELLAR_USDC_DEPOSIT'] ?? getenv('SENDRA_CENTIIV_STELLAR_USDC_DEPOSIT') ?: ''));
-        if ($stellar === '' || strlen($stellar) < 5 || $stellar[0] !== 'G') {
-            return ['ok' => true, 'skipped' => true, 'note' => 'SENDRA_CENTIIV_STELLAR_USDC_DEPOSIT unset'];
+        $recipient = SendraOfframpBridge::dryRecipient();
+        if ($recipient === '' || !SendraOfframpBridge::looksLikePayinAddress($recipient)) {
+            return ['ok' => true, 'skipped' => true, 'note' => 'offramp dry recipient unset'];
         }
         $refund = trim((string) ($_ENV['SENDRA_RAMP_HEALTH_PROBE_REFUND_APTOS'] ?? getenv('SENDRA_RAMP_HEALTH_PROBE_REFUND_APTOS') ?: ''));
         if ($refund === '' || !str_starts_with(strtolower($refund), '0x') || strlen($refund) < 10) {
-            return ['ok' => true, 'skipped' => true, 'note' => 'set SENDRA_RAMP_HEALTH_PROBE_REFUND_APTOS for Stellar route probe'];
+            return ['ok' => true, 'skipped' => true, 'note' => 'set SENDRA_RAMP_HEALTH_PROBE_REFUND_APTOS for offramp route probe'];
         }
         $originUsdc = trim((string) ($_ENV['SENDRA_ONECLICK_APTOS_USDC_ASSET_ID'] ?? getenv('SENDRA_ONECLICK_APTOS_USDC_ASSET_ID') ?: 'nep141:aptos-34ee497f210c5a511e8d5b53bc56d75b63612bb5.omft.near'));
-        $dest = trim((string) ($_ENV['SENDRA_ONECLICK_STELLAR_USDC_ASSET_ID'] ?? getenv('SENDRA_ONECLICK_STELLAR_USDC_ASSET_ID') ?: 'nep245:v2_1.omni.hot.tg:1100_111bzQBB65GxAPAVoxqmMcgYo5oS3txhqs1Uh1cgahKQUeTUq1TJu'));
         $deadline = gmdate('Y-m-d\TH:i:s\Z', time() + 3600);
-        $body = SendraOneClickService::buildAptosToStellarUsdcQuoteBody(
+        $body = SendraOneClickService::buildAptosToOfframpUsdcQuoteBody(
             $originUsdc,
-            $dest,
             '1000000',
-            $stellar,
+            $recipient,
             $refund,
             $deadline,
             true

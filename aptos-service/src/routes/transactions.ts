@@ -36,8 +36,173 @@ function frameworkTransferBuildOptions(): { maxGasAmount: number } {
   return { maxGasAmount };
 }
 
+/** Aptos SDK default is 20s; SmoothSend relayer needs time to co-sign and submit (they allow ~120s). */
+function gaslessTxExpirySecFromNow(): number {
+  const raw = process.env.APTOS_GASLESS_TX_EXPIRY_SEC?.trim();
+  const parsed = raw ? parseInt(raw, 10) : 150;
+  if (!Number.isFinite(parsed) || parsed < 60) {
+    return 150;
+  }
+  if (parsed > 600) {
+    return 600;
+  }
+  return parsed;
+}
+
+function gaslessTransferBuildOptions(extra?: Record<string, unknown>): { expireTimestamp: number } {
+  const expireTimestamp = Math.floor(Date.now() / 1000) + gaslessTxExpirySecFromNow();
+  return { expireTimestamp, ...(extra ?? {}) };
+}
+
+/**
+ * After a SmoothSend submit error, how long to poll the chain for a committed tx
+ * before reporting failure. Relayers sometimes submit successfully even when the
+ * API call times out on our side (observed: tx landed ~19s after "Request timeout").
+ */
+function gaslessRecoveryWaitSec(): number {
+  const raw = process.env.APTOS_GASLESS_RECOVERY_WAIT_SEC?.trim();
+  const parsed = raw ? parseInt(raw, 10) : 45;
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return 45;
+  }
+  return Math.min(parsed, 120);
+}
+
+/** Errors where the relayer may have submitted despite the failure we saw. */
+function isAmbiguousSubmitError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes('timeout') ||
+    lower.includes('timed out') ||
+    lower.includes('network') ||
+    lower.includes('socket') ||
+    lower.includes('econn') ||
+    lower.includes('fetch failed') ||
+    lower.includes('failed to process gasless transaction')
+  );
+}
+
+interface RecoveredTx {
+  hash: string;
+  success: boolean;
+  vmStatus: string;
+}
+
+/**
+ * Look up a committed user transaction for `senderAddress` at exactly `sequenceNumber`.
+ * Only the holder of the sender key can sign that slot, so a match with the same entry
+ * function means our transaction was relayed despite the submit error.
+ */
+async function findCommittedTxBySequence(
+  senderAddress: string,
+  sequenceNumber: bigint,
+  functionName: string
+): Promise<RecoveredTx | null> {
+  const txs = await aptos.getAccountTransactions({
+    accountAddress: senderAddress,
+    options: { offset: Number(sequenceNumber), limit: 1 },
+  });
+  const tx = txs?.[0] as any;
+  if (
+    tx &&
+    tx.type === 'user_transaction' &&
+    String(tx.sequence_number) === String(sequenceNumber) &&
+    String(tx.payload?.function ?? '') === functionName
+  ) {
+    return {
+      hash: String(tx.hash),
+      success: tx.success === true,
+      vmStatus: String(tx.vm_status ?? ''),
+    };
+  }
+  return null;
+}
+
+/**
+ * Submits via SmoothSend; on error, checks the chain before giving up.
+ * For ambiguous errors (timeouts etc.) polls up to APTOS_GASLESS_RECOVERY_WAIT_SEC;
+ * for terminal errors does a single immediate check. Rethrows the original error
+ * when no committed tx is found.
+ */
+async function submitGaslessWithChainRecovery(params: {
+  transaction: SimpleTransaction;
+  senderAuthenticator: unknown;
+  senderAddress: string;
+  functionName: string;
+  logTag: string;
+}): Promise<{ hash: string; recovered: boolean }> {
+  const submitter = getSmoothSubmitter();
+  try {
+    const pending = await submitter.submitTransaction({
+      // aptos-service uses a single Aptos instance; use its config for network routing.
+      aptosConfig: (aptos as any).config,
+      transaction: params.transaction as any,
+      senderAuthenticator: params.senderAuthenticator as any,
+      pluginParams: { functionName: params.functionName },
+    });
+    return { hash: pending.hash, recovered: false };
+  } catch (submitErr: any) {
+    const errMsg = String(submitErr?.message ?? submitErr);
+    const sequenceNumber = (params.transaction as any).rawTransaction?.sequence_number as bigint | undefined;
+    if (sequenceNumber === undefined) {
+      throw submitErr;
+    }
+
+    const ambiguous = isAmbiguousSubmitError(errMsg);
+    const waitSec = ambiguous ? gaslessRecoveryWaitSec() : 0;
+    console.error(
+      `${params.logTag} SmoothSend submit failed (${errMsg}); checking chain for committed tx ` +
+        `(sender=${params.senderAddress} seq=${sequenceNumber} wait=${waitSec}s)`
+    );
+
+    const deadline = Date.now() + waitSec * 1000;
+    // Always do one immediate check, then keep polling only within the window.
+    for (;;) {
+      try {
+        const recovered = await findCommittedTxBySequence(
+          params.senderAddress,
+          sequenceNumber,
+          params.functionName
+        );
+        if (recovered) {
+          if (!recovered.success) {
+            console.error(`${params.logTag} tx ${recovered.hash} committed but failed on-chain: ${recovered.vmStatus}`);
+            throw new Error(`Transaction was submitted but failed on-chain: ${recovered.vmStatus}`);
+          }
+          console.log(`${params.logTag} recovered committed tx after submit error: ${recovered.hash}`);
+          return { hash: recovered.hash, recovered: true };
+        }
+      } catch (lookupErr: any) {
+        if (String(lookupErr?.message ?? '').startsWith('Transaction was submitted but failed on-chain')) {
+          throw lookupErr;
+        }
+        // Transient fullnode errors (429 etc.): keep polling until the deadline.
+      }
+      if (Date.now() >= deadline) {
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 5000));
+    }
+
+    throw submitErr;
+  }
+}
+
 let smoothClientSingleton: ScriptComposerClient | null = null;
 let smoothSubmitterSingleton: SmoothSendTransactionSubmitter | null = null;
+
+/** SmoothSend HTTP timeout (ms). Default 60s (SDK default is 30s). */
+function smoothSendTimeoutMs(): number {
+  const raw = process.env.SMOOTHSEND_TIMEOUT_MS?.trim();
+  const parsed = raw ? parseInt(raw, 10) : 60000;
+  if (!Number.isFinite(parsed) || parsed < 10000) {
+    return 60000;
+  }
+  if (parsed > 120000) {
+    return 120000;
+  }
+  return parsed;
+}
 
 function getSmoothClient(): ScriptComposerClient {
   if (!smoothClientSingleton) {
@@ -50,6 +215,7 @@ function getSmoothClient(): ScriptComposerClient {
     smoothClientSingleton = new ScriptComposerClient({
       apiKey,
       network: smoothSendNetwork(),
+      timeout: smoothSendTimeoutMs(),
     });
   }
   return smoothClientSingleton;
@@ -64,6 +230,8 @@ function getSmoothSubmitter(): SmoothSendTransactionSubmitter {
     smoothSubmitterSingleton = new SmoothSendTransactionSubmitter({
       apiKey,
       network: smoothSendNetwork(),
+      timeout: smoothSendTimeoutMs(),
+      debug: true,
     });
   }
   return smoothSubmitterSingleton;
@@ -417,6 +585,9 @@ router.post('/execute-gasless', async (req: Request, res: Response) => {
       return;
     }
 
+    const userBuildOptions = typeof options === 'object' && options ? options : {};
+    const buildOptions = gaslessTransferBuildOptions(userBuildOptions as Record<string, unknown>);
+
     const transaction = await aptos.transaction.build.simple({
       sender: sender_address,
       data: {
@@ -424,7 +595,7 @@ router.post('/execute-gasless', async (req: Request, res: Response) => {
         typeArguments: resolvedTypeArguments,
         functionArguments: resolvedFunctionArguments,
       },
-      options: typeof options === 'object' && options ? options : undefined,
+      options: buildOptions,
       withFeePayer: true,
     });
 
@@ -436,7 +607,7 @@ router.post('/execute-gasless', async (req: Request, res: Response) => {
         typeArguments: resolvedTypeArguments,
         functionArguments: resolvedFunctionArguments,
       },
-      options: typeof options === 'object' && options ? options : undefined,
+      options: buildOptions,
       withFeePayer: true,
     });
 
@@ -456,25 +627,28 @@ router.post('/execute-gasless', async (req: Request, res: Response) => {
     }
 
     const senderAuthenticator = aptos.transaction.sign({ signer: senderAccount, transaction });
-    const submitter = getSmoothSubmitter();
 
-    const pending = await submitter.submitTransaction({
-      // aptos-service uses a single Aptos instance; use its config for network routing.
-      aptosConfig: (aptos as any).config,
-      transaction: transaction as any,
-      senderAuthenticator: senderAuthenticator as any,
-      pluginParams: { functionName: String(resolvedFunctionName) },
+    const { hash, recovered } = await submitGaslessWithChainRecovery({
+      transaction,
+      senderAuthenticator,
+      senderAddress: String(sender_address),
+      functionName: String(resolvedFunctionName),
+      logTag: '[transactions/execute-gasless]',
     });
 
     res.json({
       success: true,
-      tx_hash: pending.hash,
-      explorer_url: aptosExplorerTxnUrl(pending.hash),
+      tx_hash: hash,
+      explorer_url: aptosExplorerTxnUrl(hash),
       submit_mode: 'smoothsend_transaction_submitter',
       function: resolvedFunctionName,
+      recovered_after_submit_error: recovered,
     });
   } catch (e: any) {
     console.error('[transactions/execute-gasless] Error:', e.message);
+    if (e?.stack) {
+      console.error(e.stack);
+    }
     res.status(500).json({ success: false, error: e.message });
   }
 });
@@ -645,6 +819,7 @@ router.post('/panora-swap', async (req: Request, res: Response) => {
         typeArguments: resolvedTypeArguments,
         functionArguments: resolvedFunctionArguments,
       },
+      options: gaslessTransferBuildOptions(),
       withFeePayer: true,
     });
 
@@ -654,21 +829,27 @@ router.post('/panora-swap', async (req: Request, res: Response) => {
     });
     const simResult = simulation[0];
     if (!simResult.success) {
+      const vmStatus = String(simResult.vm_status ?? '');
+      console.error('Wallet swap simulation failed:', vmStatus);
+      let userError = 'We could not complete this swap. Please try again.';
+      const lower = vmStatus.toLowerCase();
+      if (lower.includes('einsufficient_balance') || lower.includes('insufficient balance')) {
+        userError = 'Insufficient balance to complete this swap.';
+      }
       res.status(400).json({
         success: false,
-        error: `Panora swap simulation failed: ${simResult.vm_status}`,
-        simulation: simResult,
+        error: userError,
       });
       return;
     }
 
     const senderAuthenticator = aptos.transaction.sign({ signer: senderAccount, transaction });
-    const submitter = getSmoothSubmitter();
-    const pending = await submitter.submitTransaction({
-      aptosConfig: (aptos as any).config,
-      transaction: transaction as any,
-      senderAuthenticator: senderAuthenticator as any,
-      pluginParams: { functionName: String(resolvedFunctionName) },
+    const { hash: swapTxHash, recovered: swapRecovered } = await submitGaslessWithChainRecovery({
+      transaction,
+      senderAuthenticator,
+      senderAddress: String(sender_address),
+      functionName: String(resolvedFunctionName),
+      logTag: '[transactions/panora-swap]',
     });
 
     const quotedTo =
@@ -680,11 +861,12 @@ router.post('/panora-swap', async (req: Request, res: Response) => {
 
     res.json({
       success: true,
-      tx_hash: pending.hash,
-      explorer_url: aptosExplorerTxnUrl(pending.hash),
+      tx_hash: swapTxHash,
+      explorer_url: aptosExplorerTxnUrl(swapTxHash),
       submit_mode: 'smoothsend_panora_swap',
       direction,
       function: resolvedFunctionName,
+      recovered_after_submit_error: swapRecovered,
       panora: {
         from_token_amount:
           best.fromTokenAmount != null ? String(best.fromTokenAmount) : hasExactIn ? String(from_token_amount) : null,

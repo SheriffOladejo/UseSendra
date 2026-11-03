@@ -10,7 +10,7 @@
  *    (`metadata.source === sendra_whatsapp`). Merchant/Svix **`disbursement.status`** is also supported
  *    when metadata is present ([catalog](https://www.svix.com/event-types/eu/org_2yieL70Sd2Iom1IBeqNlEWvzRoX/)).
  *
- * One URL in Centiiv (e.g. https://coinectra.stipendly.app/CentiivWebhook.php) can serve both.
+ * One URL in Centiiv (e.g. https://usesendra.com/CentiivWebhook.php) can serve both.
  * Svix signing: Centiiv **Protocol** (aggregate / `api.centiiv.io` events) and **Payment** (Direct Pay, etc.)
  * are separate portal tabs — each endpoint has its **own** `whsec_`. We try every configured `whsec_` until one
  * verifies ({@see centiiv_webhook_collect_svix_secrets()}).
@@ -33,6 +33,9 @@ use App\Models\DeliveryRequest;
 use App\Models\LogisticsDriver;
 use App\Models\LogisticsUser;
 use App\Models\RiderWalletTransaction;
+use App\Models\MarketplaceOrder;
+use App\Services\Marketplace\MarketplaceAfterPaymentService;
+use App\Services\Marketplace\MarketplaceWhatsAppHandler;
 use App\Services\CentiivDirectPayService;
 use App\Services\LogisticsAfterDriverFeePaidService;
 use App\Services\RiderWalletService;
@@ -43,6 +46,7 @@ use App\Services\SendraOneClickService;
 use App\Services\SendraPayoutReceiptImageService;
 use App\Services\SvixWebhookVerifier;
 use App\Services\WhatsAppService;
+use AptosV2\Support\WhatsAppBotResolver;
 
 $logisticsPhoneId = $_ENV['WHATSAPP_LOGISTICS_PHONE_NUMBER_ID'] ?? getenv('WHATSAPP_LOGISTICS_PHONE_NUMBER_ID') ?: '1097784993409171';
 $aptosPhoneId = $_ENV['WHATSAPP_APTOS_PHONE_NUMBER_ID'] ?? getenv('WHATSAPP_APTOS_PHONE_NUMBER_ID') ?: '851265871413834';
@@ -57,6 +61,7 @@ $driverModel = new LogisticsDriver($db);
 $userModel = new LogisticsUser($db);
 $whatsappService = new WhatsAppService($accessToken, $logisticsPhoneId);
 
+if (php_sapi_name() !== 'cli') {
 $payload = (string) @file_get_contents('php://input');
 $event = json_decode($payload, true);
 
@@ -98,6 +103,16 @@ if ($webhookSigningConfigured && !$allowUnsigned) {
 if (!is_array($event)) {
     http_response_code(200);
     exit('OK');
+}
+
+// Banking disburse webhooks use `event` (not `event_type`) and often omit Sendra order metadata.
+$webhookEventType = centiiv_webhook_event_type($event);
+if ($webhookEventType === 'disbursement.status') {
+    if (centiiv_sendra_handle_intermediary_disbursement_webhook($event, $accessToken, $aptosPhoneId, $aptosDb)) {
+        http_response_code(200);
+        echo 'OK';
+        exit;
+    }
 }
 
 // Centiiv sometimes sends order.* webhooks with data = order UUID string only (no beneficiary/description).
@@ -172,6 +187,12 @@ if ($paymentStatus === 'failed' || str_contains($paymentStatus, 'fail') || str_c
 }
 
 if ($paymentStatus !== 'successful') {
+    http_response_code(200);
+    exit('OK');
+}
+
+$marketplacePaid = centiiv_resolve_marketplace_payment($data, $db, $whatsappService);
+if ($marketplacePaid) {
     http_response_code(200);
     exit('OK');
 }
@@ -264,6 +285,7 @@ $finalize->run(
 
 http_response_code(200);
 echo 'OK';
+}
 
 /**
  * Unique `whsec_` secrets in env order (Payment vs Protocol vs Sendra may each use a different Svix key).
@@ -401,6 +423,48 @@ function centiiv_resolve_logistics_payment(array $data, DeliveryRequest $deliver
     }
 
     return null;
+}
+
+/**
+ * Marketplace multi-store checkout payment.
+ *
+ * @param array<string, mixed> $data
+ */
+function centiiv_resolve_marketplace_payment(array $data, PDO $db, WhatsAppService $whatsappService): bool
+{
+    $meta = $data['metadata'] ?? [];
+    if (is_object($meta)) {
+        $meta = (array) $meta;
+    }
+    if (!is_array($meta)) {
+        $meta = [];
+    }
+    $resourceId = (string) ($meta['resourceId'] ?? $meta['trackingId'] ?? '');
+    $orderModel = new MarketplaceOrder($db);
+    $order = null;
+    if ($resourceId !== '' && str_starts_with($resourceId, 'MKT_PAY_')) {
+        $order = $orderModel->findByPaymentReference($resourceId);
+    }
+    if ($order === null && $resourceId !== '' && str_starts_with($resourceId, 'DPL-')) {
+        $order = $orderModel->findByCentiivDplId($resourceId);
+    }
+    $note = is_string($data['note'] ?? null) ? $data['note'] : null;
+    $parsedNote = CentiivDirectPayService::parseMarketplaceNote($note);
+    if ($order === null && $parsedNote !== null) {
+        $order = $orderModel->findById((int) $parsedNote['marketplace_order_id']);
+    }
+    if ($order === null) {
+        return false;
+    }
+    if (($order['payment_status'] ?? '') === 'paid') {
+        return true;
+    }
+    $amountMinor = centiiv_amount_to_kobo_from_payment_data($data);
+    $amountNgn = $amountMinor / 100;
+    $ref = (string) ($order['payment_reference'] ?? $resourceId);
+    $handler = MarketplaceWhatsAppHandler::build($db, $whatsappService);
+
+    return $handler->afterPayment()->handlePaid((int) $order['id'], $amountNgn > 0 ? $amountNgn : (float) $order['total_ngn'], $ref);
 }
 
 /**
@@ -592,7 +656,28 @@ function centiiv_handle_sendra_aggregator_completion_webhook(
 
         return;
     }
-    if ($src !== 'sendra_whatsapp' && $phone === '') {
+    if ($phone === '') {
+        $descPhone = centiiv_sendra_phone_from_order_description(
+            is_string($order['description'] ?? null) ? (string) $order['description'] : null
+        );
+        if ($descPhone !== null) {
+            $phone = $descPhone;
+        }
+    }
+    $benExt = '';
+    $ben = $order['beneficiary'] ?? null;
+    if (is_object($ben)) {
+        $ben = (array) $ben;
+    }
+    if (is_array($ben)) {
+        $benExt = (string) ($ben['externalId'] ?? $ben['external_id'] ?? '');
+    }
+    $isSendraBeneficiary = $benExt !== '' && (
+        str_starts_with($benExt, 'sendra_wa_')
+        || $benExt === 'sendra_intermediary_ngn'
+        || str_starts_with($benExt, 'sendra_')
+    );
+    if ($src !== 'sendra_whatsapp' && $phone === '' && !$isSendraBeneficiary) {
         error_log('CENTIIV WEBHOOK aggregator: skip non-Sendra order ' . $rid);
 
         return;
@@ -698,6 +783,45 @@ function centiiv_sendra_lookup_pending_offramp_meta(\PDO $db, string $centiivOrd
 }
 
 /**
+ * @return array<string, mixed>|null pending_transactions.human_description JSON
+ */
+function centiiv_sendra_pending_meta_for_order(\PDO $db, string $orderLabel): ?array
+{
+    $pending = centiiv_sendra_lookup_pending_offramp_meta($db, $orderLabel);
+    if ($pending === null) {
+        return null;
+    }
+    $meta = $pending['meta'] ?? null;
+
+    return is_array($meta) ? $meta : null;
+}
+
+/**
+ * WhatsApp client for Sendra user notifications — route v2 flows to the originating bot.
+ *
+ * @param array<string, mixed>|null $pendingMeta
+ */
+function centiiv_sendra_whatsapp_for_user(
+    string $accessToken,
+    string $defaultPhoneId,
+    \PDO $aptosDb,
+    string $userPhone,
+    ?array $pendingMeta = null
+): WhatsAppService {
+    $phoneId = WhatsAppBotResolver::resolvePhoneNumberIdForOutbound(
+        $aptosDb,
+        $userPhone,
+        $pendingMeta,
+        $defaultPhoneId
+    );
+    if ($phoneId === '') {
+        $phoneId = $defaultPhoneId;
+    }
+
+    return new WhatsAppService($accessToken, $phoneId);
+}
+
+/**
  * @param array<string, mixed> $event
  */
 function centiiv_sendra_record_offramp_outcome(\PDO $db, array $event, string $orderId, ?string $phone): void
@@ -725,9 +849,12 @@ function centiiv_sendra_record_offramp_outcome(\PDO $db, array $event, string $o
 
     $targetNgn = (float) ($meta['target_receive_ngn'] ?? 0);
     if ($targetNgn <= 0) {
+        $sellCtx = is_array($meta['sell_ctx'] ?? null) ? $meta['sell_ctx'] : [];
+        $targetNgn = SendraCentiivRampService::resolveIntermediaryRequestedNgnFromPendingMeta($meta, $sellCtx);
+    }
+    if ($targetNgn <= 0) {
         $desc = (string) ($data['description'] ?? '');
-        if (preg_match('/\bSendra\s+WhatsApp\s+sell\s+\d+/i', $desc) === 1) {
-            // No target stored on legacy rows — infer from fulfillment (no shortfall learning).
+        if (centiiv_sendra_phone_from_order_description($desc) !== null) {
             $targetNgn = $fulfillmentNgn;
         }
     }
@@ -769,8 +896,30 @@ function centiiv_sendra_record_offramp_outcome(\PDO $db, array $event, string $o
         $path = 'panora_oneclick';
     } elseif ($txType === 'offramp_oneclick_centiiv') {
         $path = 'oneclick';
+    } elseif ($txType === 'offramp_stellar_centiiv') {
+        $path = 'stellar_native';
+    } elseif ($txType === 'offramp_arc_centiiv') {
+        $path = 'arc_native';
     } elseif ($txType === 'offramp_centiiv') {
         $path = 'centiiv_direct';
+    }
+
+    $oneClickDeposit = trim((string) ($pending['recipient_address'] ?? ''));
+    if ($oneClickDeposit === '' || !str_starts_with(strtolower($oneClickDeposit), '0x')) {
+        $oneClickDeposit = trim((string) ($meta['oneclick_deposit_address'] ?? $meta['deposit_address'] ?? ''));
+    }
+    if ($oneClickDeposit !== '' && !str_starts_with(strtolower($oneClickDeposit), '0x')) {
+        $oneClickDeposit = '';
+    }
+    $oneClickSwapId = trim((string) (
+        $meta['oneclick_correlation_id']
+        ?? $meta['oneclick_correlation']
+        ?? $meta['sendra_oneclick_correlation_id']
+        ?? ''
+    ));
+    $aptosTxHash = trim((string) ($pending['tx_hash'] ?? $meta['aptos_funding_tx_hash'] ?? $meta['aptos_tx_hash'] ?? ''));
+    if ($aptosTxHash !== '' && !str_starts_with(strtolower($aptosTxHash), '0x')) {
+        $aptosTxHash = '';
     }
 
     $ok = SendraOfframpSlippageService::recordOutcome([
@@ -784,6 +933,9 @@ function centiiv_sendra_record_offramp_outcome(\PDO $db, array $event, string $o
         'panora_wallet_usdc' => $panoraWallet,
         'stellar_deposit_usdc' => $stellarDeposit,
         'centiiv_order_usdc' => $orderUsdc,
+        'oneclick_deposit_address' => $oneClickDeposit !== '' ? $oneClickDeposit : null,
+        'oneclick_swap_id' => $oneClickSwapId !== '' ? $oneClickSwapId : null,
+        'aptos_tx_hash' => $aptosTxHash !== '' ? $aptosTxHash : null,
     ]);
     if ($ok) {
         $learned = SendraOfframpSlippageService::getLearnedBuffers();
@@ -832,24 +984,518 @@ function centiiv_sendra_stellar_deposit_usdc_from_order(array $data): ?float
 }
 
 /**
+ * Centiiv uses `event_type` on conversion orders and `event` on Direct Pay / banking webhooks.
+ *
+ * @param array<string, mixed> $event
+ */
+function centiiv_webhook_event_type(array $event): string
+{
+    return strtolower(trim((string) ($event['event_type'] ?? $event['event'] ?? '')));
+}
+
+/**
+ * @param array<string, mixed> $data Centiiv order payload (event data)
+ */
+function centiiv_sendra_beneficiary_external_id(array $data): ?string
+{
+    $beneficiary = $data['beneficiary'] ?? null;
+    if (is_object($beneficiary)) {
+        $beneficiary = (array) $beneficiary;
+    }
+    if (!is_array($beneficiary)) {
+        return null;
+    }
+    $externalId = $beneficiary['externalId'] ?? $beneficiary['external_id'] ?? null;
+
+    return is_string($externalId) && $externalId !== '' ? trim($externalId) : null;
+}
+
+/**
+ * Centiiv webhooks often omit custom metadata; detect intermediary off-ramps by beneficiary id.
+ *
+ * @param array<string, mixed> $event
+ */
+function centiiv_sendra_is_intermediary_offramp_event(array $event): bool
+{
+    $meta = centiiv_sendra_extract_metadata($event);
+    if (($meta['sendra_intermediary_payout'] ?? '') === '1') {
+        return true;
+    }
+
+    $data = $event['data'] ?? $event;
+    if (is_object($data)) {
+        $data = (array) $data;
+    }
+    if (!is_array($data)) {
+        $data = [];
+    }
+
+    return centiiv_sendra_beneficiary_external_id($data) === 'sendra_intermediary_ngn';
+}
+
+/**
+ * Fill sendra_intermediary_* fields from pending_transactions when Centiiv strips them from webhooks.
+ *
+ * @param array<string, mixed> $event
+ * @return array<string, mixed>
+ */
+function centiiv_sendra_merge_intermediary_meta_from_pending(array $event, \PDO $aptosDb, string $orderLabel): array
+{
+    $meta = centiiv_sendra_extract_metadata($event);
+    if (($meta['sendra_intermediary_payout'] ?? '') === '1'
+        && !empty($meta['sendra_user_account_number'])
+        && isset($meta['sendra_requested_ngn']) && is_numeric($meta['sendra_requested_ngn'])) {
+        return $meta;
+    }
+
+    $pending = centiiv_sendra_lookup_pending_offramp_meta($aptosDb, $orderLabel);
+    if ($pending === null) {
+        return $meta;
+    }
+
+    $pm = $pending['meta'];
+    $sellCtx = isset($pm['sell_ctx']) && is_array($pm['sell_ctx']) ? $pm['sell_ctx'] : [];
+
+    if (($meta['sendra_intermediary_payout'] ?? '') !== '1') {
+        $meta['sendra_intermediary_payout'] = '1';
+    }
+    if (empty($meta['sendra_requested_ngn'])) {
+        $resolved = SendraCentiivRampService::resolveIntermediaryRequestedNgnFromPendingMeta($pm, $sellCtx);
+        if ($resolved > 0) {
+            $meta['sendra_requested_ngn'] = (string) $resolved;
+        }
+    }
+    $userBank = SendraCentiivRampService::resolveIntermediaryUserBankFromPendingMeta($pm, $sellCtx);
+    if (empty($meta['sendra_user_account_number'])) {
+        $meta['sendra_user_account_number'] = $userBank['account_number'];
+    }
+    if (empty($meta['sendra_user_bank_code'])) {
+        $meta['sendra_user_bank_code'] = $userBank['bank_code'];
+    }
+    if (empty($meta['sendra_user_account_name'])) {
+        $meta['sendra_user_account_name'] = $userBank['account_name'];
+    }
+    if (empty($meta['sendra_user_bank_name'])) {
+        $meta['sendra_user_bank_name'] = $userBank['bank_name'];
+    }
+    if (empty($meta['sendra_ledger_asset'])) {
+        $meta['sendra_ledger_asset'] = strtoupper((string) ($pending['currency'] ?? 'USDT'));
+    }
+    if (empty($meta['sendra_ledger_amount']) && isset($pending['amount'])) {
+        $meta['sendra_ledger_amount'] = (string) $pending['amount'];
+    }
+    if (empty($meta['source'])) {
+        $meta['source'] = 'sendra_whatsapp';
+    }
+    if (!empty($pm['origin_whatsapp_phone_id'])) {
+        $meta['origin_whatsapp_phone_id'] = (string) $pm['origin_whatsapp_phone_id'];
+    }
+    if (empty($meta['sendra_quoted_receive_ngn'])) {
+        $quotedPool = $sellCtx['sendra_quoted_receive_ngn'] ?? $pm['sendra_quoted_receive_ngn'] ?? null;
+        if (is_numeric($quotedPool) && (float) $quotedPool > 0) {
+            $meta['sendra_quoted_receive_ngn'] = (string) round((float) $quotedPool, 2);
+        } else {
+            $quotedRaw = $pm['receive_ngn_display'] ?? null;
+            if (is_string($quotedRaw) || is_numeric($quotedRaw)) {
+                $quoted = (float) str_replace(',', '', (string) $quotedRaw);
+                $requested = isset($meta['sendra_requested_ngn']) && is_numeric($meta['sendra_requested_ngn'])
+                    ? (float) $meta['sendra_requested_ngn']
+                    : (isset($pm['target_receive_ngn']) ? (float) $pm['target_receive_ngn'] : 0.0);
+                if ($quoted > $requested + 0.01) {
+                    $meta['sendra_quoted_receive_ngn'] = (string) round($quoted, 2);
+                }
+            }
+        }
+    }
+
+    return $meta;
+}
+
+/**
+ * Fill sendra_ledger_* from pending_transactions for receipt display (user-requested debit).
+ *
+ * @return array<string, string>
+ */
+function centiiv_sendra_merge_ledger_meta_from_pending(\PDO $aptosDb, string $orderLabel): array
+{
+    $pending = centiiv_sendra_lookup_pending_offramp_meta($aptosDb, $orderLabel);
+    if ($pending === null) {
+        return [];
+    }
+
+    $patch = [];
+    $pm = $pending['meta'];
+    $ledger = SendraCentiivPayoutReceiptFactory::resolveUserSellLedger(
+        $pm,
+        isset($pending['amount']) ? (string) $pending['amount'] : null,
+        isset($pending['currency']) ? (string) $pending['currency'] : null
+    );
+    if ($ledger['asset'] !== '') {
+        $patch['sendra_ledger_asset'] = $ledger['asset'];
+    }
+    if ($ledger['amount'] !== null) {
+        $patch['sendra_ledger_amount'] = (string) $ledger['amount'];
+    }
+    if (isset($pm['centiiv_usdc_amount']) && is_numeric($pm['centiiv_usdc_amount']) && (float) $pm['centiiv_usdc_amount'] > 0) {
+        $patch['centiiv_usdc_amount'] = (string) $pm['centiiv_usdc_amount'];
+        $patch['centiiv_crypto_received'] = (string) $pm['centiiv_usdc_amount'];
+        $patch['centiiv_crypto_asset'] = 'USDC';
+    }
+
+    return $patch;
+}
+
+/**
+ * @param array<string, mixed> $event
+ * @param array<string, string> $patch
+ * @return array<string, mixed>
+ */
+function centiiv_sendra_patch_event_metadata(array $event, array $patch): array
+{
+    if ($patch === []) {
+        return $event;
+    }
+
+    $data = $event['data'] ?? $event;
+    if (is_object($data)) {
+        $data = (array) $data;
+    }
+    if (!is_array($data)) {
+        $data = [];
+    }
+
+    $meta = is_array($data['metadata'] ?? null) ? $data['metadata'] : [];
+    if (isset($meta['metadata']) && is_array($meta['metadata'])) {
+        $meta['metadata'] = array_merge($meta['metadata'], $patch);
+    }
+    $data['metadata'] = array_merge($meta, $patch);
+    $event['data'] = $data;
+
+    return $event;
+}
+
+function centiiv_sendra_intermediary_disburse_tolerance_ngn(): float
+{
+    return SendraCentiivRampService::intermediaryPoolShortfallToleranceNgn();
+}
+
+/**
+ * @return non-empty-string
+ */
+function centiiv_sendra_new_disburse_tracking_uuid(): string
+{
+    $bytes = random_bytes(16);
+    $bytes[6] = chr((ord($bytes[6]) & 0x0f) | 0x40);
+    $bytes[8] = chr((ord($bytes[8]) & 0x3f) | 0x80);
+
+    return vsprintf('%s%s-%s-%s-%s-%s%s%s', str_split(bin2hex($bytes), 4));
+}
+
+/**
+ * Idempotency key for intermediary disburse tied to Centiiv order id.
+ *
+ * @return non-empty-string
+ */
+function centiiv_sendra_intermediary_order_cache_key(string $orderLabel): string
+{
+    $safe = preg_replace('/[^a-zA-Z0-9-]/', '', $orderLabel) ?? '';
+
+    return 'order-' . ($safe !== '' ? $safe : bin2hex(random_bytes(8)));
+}
+
+/**
+ * After Centiiv credits Sendra's intermediary NGN account, disburse the exact requested amount to the user.
+ *
+ * @param array<string, mixed> $event
+ * @param array{user_phone: ?string, status: string, order_label: string, oneclick_correlation_id: string} $norm
+ */
+function centiiv_sendra_trigger_intermediary_disburse(
+    array $event,
+    array $norm,
+    string $phone,
+    string $orderLabel,
+    \PDO $aptosDb,
+    WhatsAppService $wa
+): bool {
+    $meta = centiiv_sendra_merge_intermediary_meta_from_pending($event, $aptosDb, $orderLabel);
+    $requested = (float) ($meta['sendra_requested_ngn'] ?? 0);
+    $userAcct = trim((string) ($meta['sendra_user_account_number'] ?? ''));
+    $userCode = trim((string) ($meta['sendra_user_bank_code'] ?? ''));
+    $userName = trim((string) ($meta['sendra_user_account_name'] ?? ''));
+    $userBank = trim((string) ($meta['sendra_user_bank_name'] ?? ''));
+
+    if ($requested <= 0 || strlen($userAcct) !== 10 || $userCode === '') {
+        error_log('CENTIIV WEBHOOK sendra intermediary: missing user bank or requested NGN for ' . $orderLabel);
+
+        return false;
+    }
+
+    $data = $event['data'] ?? $event;
+    if (is_object($data)) {
+        $data = (array) $data;
+    }
+    if (!is_array($data)) {
+        $data = [];
+    }
+
+    $receivedNgn = centiiv_sendra_fulfillment_ngn_from_order($data);
+    $quotedNgn = null;
+    if (isset($meta['sendra_quoted_receive_ngn']) && is_numeric($meta['sendra_quoted_receive_ngn'])) {
+        $quotedNgn = round((float) $meta['sendra_quoted_receive_ngn'], 2);
+    }
+    $cryptoAtCentiiv = SendraCentiivPayoutReceiptFactory::resolveCryptoReceivedAtCentiiv($meta, $data);
+
+    if ($receivedNgn === null || !SendraCentiivRampService::intermediaryPoolCoversUserPayout($requested, $receivedNgn)) {
+        $got = $receivedNgn !== null ? number_format($receivedNgn, 2, '.', ',') : '0.00';
+        $need = SendraCentiivRampService::intermediaryPoolMinimumReceivedNgn($requested);
+        error_log(
+            'CENTIIV WEBHOOK sendra intermediary: pool shortfall order=' . $orderLabel
+            . ' requested=' . $requested . ' received=' . ($receivedNgn ?? 'null')
+            . ' pool_min=' . $need
+        );
+        // Notify once — Centiiv/Svix retries + poller must not re-spam the same shortfall.
+        if (SendraCentiivRampService::claimPoolShortfallUserNotify($orderLabel)) {
+            $wa->sendMessage(
+                $phone,
+                "⚠️ *Payout delayed*\n\n" .
+                "We received *₦{$got}* in our settlement account but need at least *₦" . number_format($need, 0, '.', ',') . "* before sending *₦" .
+                number_format($requested, 0, '.', ',') . "* to your bank.\n\n" .
+                "Your crypto conversion completed. Our team is reviewing this — contact support@usesendra.com if you need help.\n\n" .
+                "Order: `{$orderLabel}`"
+            );
+        }
+
+        return false;
+    }
+
+    $existingOrder = SendraCentiivRampService::loadIntermediaryDisburseContextForOrder($orderLabel);
+    if (is_array($existingOrder) && !empty($existingOrder['disburse_tracking_id'])) {
+        error_log('CENTIIV WEBHOOK sendra intermediary: disburse already queued for order ' . $orderLabel);
+
+        return true;
+    }
+
+    $trackingId = centiiv_sendra_new_disburse_tracking_uuid();
+
+    $storedRef = centiiv_sendra_lookup_payout_reference($aptosDb, $orderLabel);
+    $centiivOrderRate = SendraCentiivRampService::extractOfficialNgnRateFromOrder($data);
+    $ctx = [
+        'user_phone' => $phone,
+        'centiiv_order_id' => $orderLabel,
+        'requested_ngn' => $requested,
+        'received_ngn' => $receivedNgn,
+        'quoted_receive_ngn' => $quotedNgn,
+        'centiiv_crypto_received' => $cryptoAtCentiiv['amount'] ?? null,
+        'centiiv_crypto_asset' => $cryptoAtCentiiv['asset'] ?? (string) ($meta['sendra_ledger_asset'] ?? 'USDT'),
+        'user_account_number' => $userAcct,
+        'user_bank_code' => $userCode,
+        'user_account_name' => $userName,
+        'user_bank_name' => $userBank,
+        'sendra_payout_reference' => $storedRef,
+        'sendra_ledger_asset' => (string) ($meta['sendra_ledger_asset'] ?? 'USDT'),
+        'sendra_ledger_amount' => (string) ($meta['sendra_ledger_amount'] ?? ''),
+        'oneclick_correlation_id' => (string) ($norm['oneclick_correlation_id'] ?? ''),
+        'disburse_tracking_id' => $trackingId,
+        'centiiv_order_rate' => $centiivOrderRate,
+    ];
+    if (!empty($meta['origin_whatsapp_phone_id'])) {
+        $ctx['origin_whatsapp_phone_id'] = (string) $meta['origin_whatsapp_phone_id'];
+    }
+    SendraCentiivRampService::cacheIntermediaryDisburseContextForOrder($orderLabel, $trackingId, $ctx);
+
+    $agg = new SendraCentiivRampService();
+    $res = $agg->disburseNgnToBank(
+        $userAcct,
+        $userCode,
+        $requested,
+        $trackingId,
+        'Sendra WhatsApp payout ' . $phone
+    );
+
+    if (!$res['success']) {
+        error_log(
+            'CENTIIV WEBHOOK sendra intermediary disburse failed order=' . $orderLabel
+            . ' err=' . ($res['error'] ?? 'unknown')
+            . ' data=' . json_encode($res['data'] ?? [])
+        );
+
+        return false;
+    }
+
+    error_log('CENTIIV WEBHOOK sendra intermediary disburse queued tracking=' . $trackingId . ' order=' . $orderLabel);
+
+    centiiv_sendra_send_intermediary_receipt_from_ctx($wa, $ctx);
+
+    return true;
+}
+
+/**
+ * Send intermediary bank payout receipt to WhatsApp.
+ *
+ * @param array<string, mixed> $ctx
+ */
+function centiiv_sendra_send_intermediary_receipt_from_ctx(WhatsAppService $wa, array $ctx, array $eventPayload = []): bool
+{
+    $phone = trim((string) ($ctx['user_phone'] ?? ''));
+    if ($phone === '') {
+        return false;
+    }
+
+    $trackingId = trim((string) ($ctx['disburse_tracking_id'] ?? $ctx['centiiv_order_id'] ?? ''));
+    $requested = (float) ($ctx['requested_ngn'] ?? 0);
+    $feeFields = SendraCentiivPayoutReceiptFactory::resolveIntermediaryReceiptFee($requested, $ctx);
+
+    try {
+        $receiptModel = [
+            'amount_ngn' => $requested > 0 ? $requested : null,
+            'transaction_fee_ngn' => $feeFields['transaction_fee_ngn'],
+            'transaction_fee_crypto' => $feeFields['transaction_fee_crypto'],
+            'transaction_fee_asset' => $feeFields['transaction_fee_asset'],
+            'account_name' => (string) ($ctx['user_account_name'] ?? '—'),
+            'account_number' => (string) ($ctx['user_account_number'] ?? '—'),
+            'bank_name' => (string) ($ctx['user_bank_name'] ?? '—'),
+            'withdraw_asset' => (string) ($ctx['sendra_ledger_asset'] ?? 'USDT'),
+            'withdraw_amount' => is_numeric($ctx['sendra_ledger_amount'] ?? null) ? (float) $ctx['sendra_ledger_amount'] : null,
+            'display_reference' => SendraCentiivPayoutReceiptFactory::resolveIntermediaryDisplayReference($ctx, $eventPayload),
+            'transaction_id' => $trackingId !== '' ? $trackingId : null,
+            'sender_name' => (string) (
+                $ctx['sender_name']
+                ?? SendraCentiivPayoutReceiptFactory::resolveReceiptSenderLabel(true)
+            ),
+            'completed_at' => SendraCentiivPayoutReceiptFactory::formatReceiptNow('M j, Y g:i A'),
+            'conversion_rate' => SendraCentiivPayoutReceiptFactory::formatIntermediaryReceiptConversionRate($ctx),
+        ];
+
+        $receiptPath = SendraPayoutReceiptImageService::renderToTempFile($receiptModel);
+        if ($receiptPath !== null && is_readable($receiptPath)) {
+            $wa->sendImage($phone, $receiptPath, '✅ Sendra — bank payout receipt');
+            @unlink($receiptPath);
+
+            return true;
+        }
+    } catch (\Throwable $e) {
+        error_log('CENTIIV WEBHOOK sendra intermediary receipt: ' . $e->getMessage());
+    }
+
+    return false;
+}
+
+/**
+ * Send receipt when Centiiv reports intermediary disbursement complete.
+ *
+ * @param array<string, mixed> $event
+ */
+function centiiv_sendra_handle_intermediary_disbursement_webhook(
+    array $event,
+    string $accessToken,
+    string $defaultPhoneId,
+    \PDO $aptosDb
+): bool {
+    $data = $event['data'] ?? $event;
+    if (is_object($data)) {
+        $data = (array) $data;
+    }
+    if (!is_array($data)) {
+        return false;
+    }
+
+    $meta = centiiv_sendra_extract_metadata($event);
+    $dataMeta = is_array($data['metadata'] ?? null) ? $data['metadata'] : [];
+
+    $trackingId = trim((string) (
+        $data['trackingId']
+        ?? $data['tracking_id']
+        ?? $dataMeta['trackingId']
+        ?? $dataMeta['tracking_id']
+        ?? $meta['trackingId']
+        ?? ''
+    ));
+    if ($trackingId === '') {
+        return false;
+    }
+
+    $status = strtolower(trim((string) ($data['status'] ?? $event['status'] ?? '')));
+    if ($status !== '' && !centiiv_sendra_is_terminal_success($status)) {
+        if (centiiv_sendra_is_terminal_failure($status)) {
+            error_log('CENTIIV WEBHOOK sendra intermediary disburse failed tracking=' . $trackingId . ' status=' . $status);
+        }
+
+        return true;
+    }
+
+    $ctx = SendraCentiivRampService::loadIntermediaryDisburseContext($trackingId);
+    if ($ctx === null) {
+        return false;
+    }
+
+    $ctx['sender_name'] = SendraCentiivPayoutReceiptFactory::resolveReceiptSenderLabel(true, $data, $meta);
+    SendraCentiivRampService::cacheIntermediaryDisburseContext($trackingId, $ctx);
+    $orderIdForCtx = trim((string) ($ctx['centiiv_order_id'] ?? ''));
+    if ($orderIdForCtx !== '') {
+        SendraCentiivRampService::cacheIntermediaryDisburseContext(
+            centiiv_sendra_intermediary_order_cache_key($orderIdForCtx),
+            $ctx
+        );
+    }
+
+    $phone = trim((string) ($ctx['user_phone'] ?? ''));
+    if ($phone === '') {
+        return false;
+    }
+
+    $lockKey = 'intermediary_disb_' . $trackingId;
+    if (!centiiv_sendra_try_claim_terminal_notify($lockKey)) {
+        return true;
+    }
+
+    $pendingMeta = null;
+    $origin = trim((string) ($ctx['origin_whatsapp_phone_id'] ?? ''));
+    if ($origin !== '') {
+        $pendingMeta = ['origin_whatsapp_phone_id' => $origin];
+    } else {
+        $orderId = trim((string) ($ctx['centiiv_order_id'] ?? ''));
+        if ($orderId !== '') {
+            $pendingMeta = centiiv_sendra_pending_meta_for_order($aptosDb, $orderId);
+        }
+    }
+    $wa = centiiv_sendra_whatsapp_for_user($accessToken, $defaultPhoneId, $aptosDb, $phone, $pendingMeta);
+
+    try {
+        if (!centiiv_sendra_send_intermediary_receipt_from_ctx($wa, $ctx, $data)) {
+            centiiv_sendra_release_terminal_notify_lock($lockKey);
+
+            return false;
+        }
+    } catch (\Throwable $e) {
+        error_log('CENTIIV WEBHOOK sendra intermediary receipt: ' . $e->getMessage());
+        centiiv_sendra_release_terminal_notify_lock($lockKey);
+
+        return false;
+    }
+
+    return true;
+}
+
+/**
  * Sendra Aptos sell/buy — order status webhooks from api.centiiv.io (metadata.source = sendra_whatsapp).
  *
  * @param array<string, mixed> $event
  */
 function centiiv_handle_sendra_ramp_webhook(array $event, string $accessToken, string $aptosPhoneId, \PDO $aptosDb): void
 {
-    $eventType = strtolower(trim((string) ($event['event_type'] ?? '')));
+    $eventType = centiiv_webhook_event_type($event);
     if ($eventType === 'order.created') {
         SendraCentiivRampService::cacheOfframpOrderCreatedFromWebhook($event);
+        SendraCentiivRampService::cacheOnrampOrderCreatedFromWebhook($event);
+        centiiv_sendra_try_notify_buy_bank_on_order_created($event, $accessToken, $aptosPhoneId, $aptosDb);
     }
 
-    $wa = new WhatsAppService($accessToken, $aptosPhoneId);
     $norm = centiiv_sendra_normalize_conversion_event($event);
     $phone = $norm['user_phone'];
     $status = $norm['status'];
     $orderLabel = $norm['order_label'];
     $oneclickRef = isset($norm['oneclick_correlation_id']) ? trim((string) $norm['oneclick_correlation_id']) : '';
-    $refLine = $oneclickRef !== '' ? ("\n1Click ref: `{$oneclickRef}`") : '';
+    $refLine = $oneclickRef !== '' ? ("\nRef: `{$oneclickRef}`") : '';
     $isBuy = centiiv_sendra_event_is_buy($event, $norm);
 
     if ($phone === null || $phone === '') {
@@ -858,6 +1504,9 @@ function centiiv_handle_sendra_ramp_webhook(array $event, string $accessToken, s
         return;
     }
 
+    $pendingMeta = centiiv_sendra_pending_meta_for_order($aptosDb, $orderLabel);
+    $wa = centiiv_sendra_whatsapp_for_user($accessToken, $aptosPhoneId, $aptosDb, $phone, $pendingMeta);
+
     $statusLc = strtolower($status);
     if ($statusLc === '') {
         return;
@@ -865,6 +1514,11 @@ function centiiv_handle_sendra_ramp_webhook(array $event, string $accessToken, s
 
     if ($isBuy) {
         centiiv_sendra_try_submit_buy_oneclick_deposit($event, $aptosDb, $orderLabel);
+    }
+
+    // Intermediary exact-amount disburse completion → receipt only.
+    if ($eventType === 'disbursement.status' && centiiv_sendra_handle_intermediary_disbursement_webhook($event, $accessToken, $aptosPhoneId, $aptosDb)) {
+        return;
     }
 
     if (centiiv_sendra_is_terminal_success($statusLc)) {
@@ -881,28 +1535,92 @@ function centiiv_handle_sendra_ramp_webhook(array $event, string $accessToken, s
                     $data = (array) $data;
                 }
                 $meta = centiiv_sendra_extract_metadata($event);
-                $asset = (string) ($meta['sendra_ledger_asset'] ?? 'USDC');
-                $recv = (string) ($meta['sendra_ledger_amount'] ?? '—');
-                $msgRes = $wa->sendMessage(
-                    $phone,
-                    "✅ *Naira payment received*\n\n" .
-                    "Order `{$orderLabel}` — we're converting to *{$recv} {$asset}* for your wallet.{$refLine}\n\n" .
-                    "You'll get another message when crypto lands (usually a few minutes)."
-                );
+                $pendingForBuy = is_array($pendingMeta) ? $pendingMeta : [];
+                $mergedBuyMeta = array_merge($pendingForBuy, $meta);
+                $stellarBuy = \App\Services\SendraIndexerDepositNotifyService::isNativeStellarOnrampMeta($mergedBuyMeta);
+                $arcBuy = \App\Services\SendraIndexerDepositNotifyService::isNativeArcOnrampMeta($mergedBuyMeta);
+                $solanaBuy = \App\Services\SendraIndexerDepositNotifyService::isDirectSolanaOnrampMeta($mergedBuyMeta);
+                if ($solanaBuy) {
+                    $asset = (string) ($meta['sendra_ledger_asset'] ?? $pendingForBuy['ledger_asset'] ?? 'USDC');
+                    $recv = centiiv_sendra_buy_recv_amount_display($event, $aptosDb, $orderLabel);
+                    $solAddr = trim((string) (
+                        $meta['sendra_user_solana']
+                        ?? $pendingForBuy['solana_destination']
+                        ?? $pendingForBuy['user_solana']
+                        ?? ''
+                    ));
+                    $solShort = $solAddr !== ''
+                        ? (strlen($solAddr) > 12 ? (substr($solAddr, 0, 4) . '…' . substr($solAddr, -4)) : $solAddr)
+                        : 'your Solana address';
+                    $wa->sendMessage(
+                        $phone,
+                        "✅ *Naira payment received*\n\n" .
+                        "Order `{$orderLabel}` — Sendra is sending *{$recv} {$asset}* on Solana to `{$solShort}`.\n\n" .
+                        "Check that wallet; Sendra does not hold Solana for you."
+                    );
+                    $pendingRow = centiiv_sendra_find_onramp_pending($aptosDb, $orderLabel);
+                    if (is_array($pendingRow)) {
+                        $recvAmt = 0.0;
+                        if (preg_match('/([\d.]+)/', (string) $recv, $mAmt) === 1) {
+                            $recvAmt = (float) $mAmt[1];
+                        }
+                        \App\Services\SendraIndexerDepositNotifyService::completeBuyOnramp(
+                            $aptosDb,
+                            $wa,
+                            $pendingRow,
+                            $recvAmt,
+                            $asset,
+                            null,
+                            null,
+                            'solana_payout'
+                        );
+                    }
+                } elseif (!$stellarBuy && !$arcBuy) {
+                    $asset = (string) ($meta['sendra_ledger_asset'] ?? 'USDC');
+                    $recv = centiiv_sendra_buy_recv_amount_display($event, $aptosDb, $orderLabel);
+                    $msgRes = $wa->sendMessage(
+                        $phone,
+                        "✅ *Naira payment received*\n\n" .
+                        "Order `{$orderLabel}` — we're converting to *{$recv} {$asset}* for your wallet.{$refLine}\n\n" .
+                        "You'll get another message when crypto lands (usually a few minutes)."
+                    );
+                }
                 centiiv_sendra_mark_onramp_paid($aptosDb, $orderLabel);
+                centiiv_sendra_try_stellar_pool_sweep($event, $aptosDb, $phone, $recv ?? '', $orderLabel, $wa);
             } else {
                 centiiv_sendra_record_offramp_outcome($aptosDb, $event, $orderLabel, $phone);
+
+                if (centiiv_sendra_is_intermediary_offramp_event($event)) {
+                    $disbOk = centiiv_sendra_trigger_intermediary_disburse($event, $norm, $phone, $orderLabel, $aptosDb, $wa);
+                    // Keep terminal lock after pool-shortfall notify so retries do not re-enter.
+                    $notifyOk = $disbOk || SendraCentiivRampService::poolShortfallUserNotifyClaimed($orderLabel);
+                    if (!$disbOk) {
+                        error_log('CENTIIV WEBHOOK sendra: intermediary disburse failed for order ' . $orderLabel);
+                    }
+
+                    return;
+                }
 
                 $receiptPath = null;
                 try {
                     $storedRef = centiiv_sendra_lookup_payout_reference($aptosDb, $orderLabel);
-                    $receiptModel = SendraCentiivPayoutReceiptFactory::build($event, $norm, $storedRef);
+                    $ledgerPatch = centiiv_sendra_merge_ledger_meta_from_pending($aptosDb, $orderLabel);
+                    $receiptEvent = centiiv_sendra_patch_event_metadata($event, $ledgerPatch);
+                    $receiptNorm = $norm;
+                    if (!empty($ledgerPatch['sendra_ledger_asset'])) {
+                        $receiptNorm['ledger_asset'] = $ledgerPatch['sendra_ledger_asset'];
+                    }
+                    if (!empty($ledgerPatch['sendra_ledger_amount'])) {
+                        $receiptNorm['ledger_amount'] = $ledgerPatch['sendra_ledger_amount'];
+                    }
+                    $receiptModel = SendraCentiivPayoutReceiptFactory::build($receiptEvent, $receiptNorm, $storedRef);
                     $receiptPath = SendraPayoutReceiptImageService::renderToTempFile($receiptModel);
                 } catch (\Throwable $e) {
                     error_log('CENTIIV WEBHOOK sendra receipt: ' . $e->getMessage());
                 }
                 if ($receiptPath !== null && is_string($receiptPath) && is_readable($receiptPath)) {
                     $imgRes = $wa->sendImage($phone, $receiptPath, '✅ Sendra — bank payout receipt');
+                    $notifyOk = is_array($imgRes) && !empty($imgRes['success']);
                     if ($imgRes === false) {
                         error_log('CENTIIV WEBHOOK sendra: sendImage upload failed for ' . $phone);
                     } elseif (is_array($imgRes) && empty($imgRes['success'])) {
@@ -910,15 +1628,8 @@ function centiiv_handle_sendra_ramp_webhook(array $event, string $accessToken, s
                     }
                     @unlink($receiptPath);
                 }
-                $msgRes = $wa->sendMessage(
-                    $phone,
-                    "✅ *Bank payout complete*\n\n" .
-                    "Order `{$orderLabel}` — NGN should credit your account shortly if it has not already.{$refLine}\n\n" .
-                    'Need help? support@usesendra.com'
-                );
             }
-            $notifyOk = is_array($msgRes) && !empty($msgRes['success']);
-            if (!$notifyOk) {
+            if (!$notifyOk && $isBuy) {
                 error_log('CENTIIV WEBHOOK sendra: sendMessage failed for ' . $phone);
             }
         } finally {
@@ -927,15 +1638,20 @@ function centiiv_handle_sendra_ramp_webhook(array $event, string $accessToken, s
             }
         }
     } elseif (centiiv_sendra_is_terminal_failure($statusLc)) {
-        $failLead = $isBuy ? 'Buy order' : 'Conversion';
-        $wa->sendMessage(
-            $phone,
-            "⚠️ *{$failLead} update*\n\n" .
-            "Your Centiiv order ({$orderLabel}) reported: *{$status}*.{$refLine}\n" .
-            "If you already paid, contact support@usesendra.com with this message."
-        );
         if ($isBuy) {
+            $failLead = 'Buy order';
+            $wa->sendMessage(
+                $phone,
+                "⚠️ *{$failLead} update*\n\n" .
+                "Your buy order ({$orderLabel}) reported: *{$status}*.{$refLine}\n" .
+                "If you already paid, contact support@usesendra.com with this message."
+            );
             centiiv_sendra_mark_onramp_failed($aptosDb, $orderLabel);
+        } else {
+            error_log(
+                'CENTIIV WEBHOOK sendra offramp terminal failure (no user notify): order='
+                . $orderLabel . ' status=' . $status . ' phone=' . $phone
+            );
         }
     }
 }
@@ -1028,6 +1744,25 @@ function centiiv_try_handle_sendra_order_id_status_webhook(
 }
 
 /**
+ * Extract WhatsApp phone from Centiiv order description.
+ * Matches "Sendra WhatsApp sell {phone}", "Sendra WhatsApp Stellar sell {phone}", and buy variants.
+ */
+function centiiv_sendra_phone_from_order_description(?string $desc): ?string
+{
+    if ($desc === null || $desc === '') {
+        return null;
+    }
+    if (preg_match('/\bSendra\s+WhatsApp\s+(?:[A-Za-z]+\s+)?sell\s+(\d{10,20})\b/i', $desc, $m) === 1) {
+        return $m[1];
+    }
+    if (preg_match('/\bSendra\s+WhatsApp\s+(?:[A-Za-z]+\s+)?buy\s+(\d{10,20})\b/i', $desc, $m) === 1) {
+        return $m[1];
+    }
+
+    return null;
+}
+
+/**
  * @param array<string, mixed> $event
  */
 function centiiv_payload_is_sendra_ramp(array $event): bool
@@ -1038,8 +1773,8 @@ function centiiv_payload_is_sendra_ramp(array $event): bool
     }
 
     // Newer Centiiv order status webhooks may omit metadata.source/user_phone but still be Sendra:
-    // - beneficiary.externalId like "sendra_wa_2348..."
-    // - description like "Sendra WhatsApp sell 2347..."
+    // - beneficiary.externalId like "sendra_wa_2348..." or "sendra_intermediary_ngn"
+    // - description like "Sendra WhatsApp sell 2347..." / "Sendra WhatsApp Stellar sell 2347..."
     $data = $event['data'] ?? null;
     if (is_object($data)) {
         $data = (array) $data;
@@ -1053,16 +1788,16 @@ function centiiv_payload_is_sendra_ramp(array $event): bool
     }
     if (is_array($beneficiary)) {
         $externalId = $beneficiary['externalId'] ?? $beneficiary['external_id'] ?? null;
-        if (is_string($externalId) && str_starts_with($externalId, 'sendra_wa_')) {
+        if (is_string($externalId) && (
+            str_starts_with($externalId, 'sendra_wa_')
+            || $externalId === 'sendra_intermediary_ngn'
+            || str_starts_with($externalId, 'sendra_')
+        )) {
             return true;
         }
     }
     $desc = $data['description'] ?? $event['description'] ?? null;
-    if (is_string($desc) && preg_match('/\bSendra\s+WhatsApp\s+sell\s+(\d{10,20})\b/i', $desc) === 1) {
-        return true;
-    }
-
-    if (is_string($desc) && preg_match('/\bSendra\s+WhatsApp\s+buy\s+(\d{10,20})\b/i', $desc) === 1) {
+    if (centiiv_sendra_phone_from_order_description(is_string($desc) ? $desc : null) !== null) {
         return true;
     }
 
@@ -1109,14 +1844,9 @@ function centiiv_sendra_normalize_conversion_event(array $event): array
     }
     // Order description is set by Sendra at create-order time from the WhatsApp sender — prefer over
     // beneficiary.externalId (Centiiv verify may attach a stale id for a reused NUBAN).
+    // Supports "Sendra WhatsApp sell …" and "Sendra WhatsApp Stellar sell …".
     $desc = $data['description'] ?? $event['description'] ?? null;
-    $phoneFromDesc = null;
-    if (is_string($desc) && preg_match('/\bSendra\s+WhatsApp\s+sell\s+(\d{10,20})\b/i', $desc, $m) === 1) {
-        $phoneFromDesc = $m[1];
-    }
-    if ($phoneFromDesc === null && is_string($desc) && preg_match('/\bSendra\s+WhatsApp\s+buy\s+(\d{10,20})\b/i', $desc, $m) === 1) {
-        $phoneFromDesc = $m[1];
-    }
+    $phoneFromDesc = centiiv_sendra_phone_from_order_description(is_string($desc) ? $desc : null);
     if ($phoneFromDesc !== null && $phoneFromDesc !== '') {
         if ($phone === null || $phone === '' || $phone !== $phoneFromDesc) {
             if ($phone !== null && $phone !== '' && $phone !== $phoneFromDesc) {
@@ -1218,12 +1948,77 @@ function centiiv_sendra_event_is_buy(array $event, array $norm): bool
 }
 
 /**
+ * USDC amount to show on buy "Naira payment received" (Centiiv webhook often omits sendra_ledger_amount).
+ *
+ * @param array<string, mixed> $event
+ */
+function centiiv_sendra_buy_recv_amount_display(array $event, \PDO $aptosDb, string $orderLabel): string
+{
+    $data = $event['data'] ?? $event;
+    if (is_object($data)) {
+        $data = (array) $data;
+    }
+    if (!is_array($data)) {
+        return '—';
+    }
+
+    $fulfillments = $data['fulfillments'] ?? null;
+    if (is_array($fulfillments)) {
+        foreach ($fulfillments as $fulfillment) {
+            if (!is_array($fulfillment)) {
+                continue;
+            }
+            $amt = $fulfillment['amount'] ?? null;
+            if ($amt !== null && is_numeric($amt) && (float) $amt > 0) {
+                return (string) $amt;
+            }
+        }
+    }
+
+    $row = centiiv_sendra_find_onramp_pending($aptosDb, $orderLabel);
+    if ($row !== null) {
+        if (isset($row['amount']) && is_numeric($row['amount']) && (float) $row['amount'] > 0) {
+            return (string) $row['amount'];
+        }
+        $pendingMeta = json_decode((string) ($row['human_description'] ?? ''), true);
+        if (is_array($pendingMeta)) {
+            if (!empty($pendingMeta['receive_crypto_display'])) {
+                return (string) $pendingMeta['receive_crypto_display'];
+            }
+            if (!empty($pendingMeta['sendra_ledger_amount'])) {
+                return (string) $pendingMeta['sendra_ledger_amount'];
+            }
+        }
+    }
+
+    $meta = centiiv_sendra_extract_metadata($event);
+    if (!empty($meta['sendra_ledger_amount'])) {
+        return (string) $meta['sendra_ledger_amount'];
+    }
+
+    return '—';
+}
+
+/**
  * When Centiiv sends Stellar USDC to 1Click, notify 1Click with the on-chain tx hash.
  *
  * @param array<string, mixed> $event
  */
 function centiiv_sendra_try_submit_buy_oneclick_deposit(array $event, \PDO $aptosDb, string $orderLabel): void
 {
+    $row = centiiv_sendra_find_onramp_pending($aptosDb, $orderLabel);
+    $pendingMeta = [];
+    if ($row !== null) {
+        $decoded = json_decode((string) ($row['human_description'] ?? ''), true);
+        if (is_array($decoded)) {
+            $pendingMeta = $decoded;
+        }
+    }
+    $eventMeta = centiiv_sendra_extract_metadata($event);
+    if (\App\Services\SendraIndexerDepositNotifyService::skipsOneClickOnrampMeta(array_merge($pendingMeta, $eventMeta))) {
+        return;
+    }
+
     $data = $event['data'] ?? $event;
     if (is_object($data)) {
         $data = (array) $data;
@@ -1237,20 +2032,19 @@ function centiiv_sendra_try_submit_buy_oneclick_deposit(array $event, \PDO $apto
         return;
     }
 
-    $row = centiiv_sendra_find_onramp_pending($aptosDb, $orderLabel);
     if ($row === null) {
         return;
     }
 
-    $meta = json_decode((string) ($row['human_description'] ?? ''), true);
-    if (!is_array($meta)) {
+    $meta = $pendingMeta;
+    if ($meta === []) {
         return;
     }
     if (!empty($meta['oneclick_deposit_submitted'])) {
         return;
     }
 
-    $deposit = (string) ($meta['sendra_oneclick_deposit_stellar'] ?? $row['recipient_address'] ?? '');
+    $deposit = (string) ($meta['sendra_oneclick_deposit_address'] ?? $meta['sendra_oneclick_deposit_stellar'] ?? $row['recipient_address'] ?? '');
     if ($deposit === '') {
         return;
     }
@@ -1279,8 +2073,170 @@ function centiiv_sendra_try_submit_buy_oneclick_deposit(array $event, \PDO $apto
 }
 
 /**
- * @return ?array<string, mixed>
+ * When Centiiv creates the buy order before HTTP returns, push virtual bank details over WhatsApp.
+ *
+ * @param array<string, mixed> $event
  */
+function centiiv_sendra_try_notify_buy_bank_on_order_created(
+    array $event,
+    string $accessToken,
+    string $aptosPhoneId,
+    \PDO $aptosDb
+): void {
+    try {
+        $norm = centiiv_sendra_normalize_conversion_event($event);
+        if (!centiiv_sendra_event_is_buy($event, $norm)) {
+            return;
+        }
+
+        $phone = $norm['user_phone'] ?? null;
+        if ($phone === null || $phone === '') {
+            error_log('CENTIIV WEBHOOK sendra buy: skip bank notify — no phone');
+
+            return;
+        }
+
+        $data = $event['data'] ?? $event;
+        if (is_object($data)) {
+            $data = (array) $data;
+        }
+        if (!is_array($data)) {
+            error_log('CENTIIV WEBHOOK sendra buy: skip bank notify — no data');
+
+            return;
+        }
+
+        $orderId = (string) ($data['id'] ?? $norm['order_label'] ?? '');
+        if ($orderId === '') {
+            error_log('CENTIIV WEBHOOK sendra buy: skip bank notify — no order id');
+
+            return;
+        }
+
+        $bank = SendraCentiivRampService::extractVirtualBankAccount($data);
+        if ($bank === null) {
+            error_log('CENTIIV WEBHOOK sendra buy: skip bank notify — no virtual bank on order ' . $orderId);
+
+            return;
+        }
+
+        $stmt = $aptosDb->prepare("
+        SELECT id FROM pending_transactions
+        WHERE tx_type = 'onramp_oneclick_centiiv'
+          AND user_phone = :phone
+          AND (
+            human_description LIKE :like_id
+            OR human_description LIKE :like_id2
+          )
+        LIMIT 1
+    ");
+    $stmt->execute([
+        'phone' => $phone,
+        'like_id' => '%"centiiv_order_id":"' . $orderId . '"%',
+        'like_id2' => '%"centiiv_order_id": "' . $orderId . '"%',
+    ]);
+        if ($stmt->fetch(\PDO::FETCH_ASSOC) !== false) {
+            error_log('CENTIIV WEBHOOK sendra buy: skip bank notify — pending already exists for ' . $orderId);
+
+            return;
+        }
+
+        $desc = (string) ($data['description'] ?? '');
+    $oneclickCorrelation = null;
+    $memo = null;
+    if (preg_match('/\(1Click\s+([0-9a-f-]{36})\)/i', $desc, $m) === 1) {
+        $oneclickCorrelation = $m[1];
+    }
+    if (preg_match('/\bmemo:(\d+)\b/i', $desc, $m) === 1) {
+        $memo = $m[1];
+    }
+    $beneficiary = $data['beneficiary'] ?? null;
+    $stellarDest = is_array($beneficiary) ? (string) ($beneficiary['address'] ?? '') : '';
+
+    $payNgn = (float) ($data['amount'] ?? 0);
+    $eventMeta = centiiv_sendra_extract_metadata($event);
+    $destChain = strtolower((string) ($eventMeta['sendra_dest_chain'] ?? ''));
+    $solDest = trim((string) ($eventMeta['sendra_user_solana'] ?? ''));
+    $skipOneClick = \App\Services\SendraIndexerDepositNotifyService::skipsOneClickOnrampMeta([
+        'dest_chain' => $destChain,
+        'sendra_dest_chain' => $destChain,
+    ]);
+    $meta = [
+        'kind' => 'oneclick_centiiv_onramp',
+        'centiiv_order_id' => $orderId,
+        'pay_ngn' => $payNgn,
+        'pay_ngn_display' => number_format($payNgn, 2, '.', ','),
+        'ledger_asset' => (string) ($eventMeta['sendra_ledger_asset'] ?? 'USDC'),
+        'user_aptos' => null,
+        'sendra_oneclick_correlation_id' => $oneclickCorrelation,
+        'sendra_oneclick_deposit_stellar' => $stellarDest !== '' ? $stellarDest : null,
+        'sendra_oneclick_deposit_address' => $stellarDest !== '' ? $stellarDest : null,
+        'sendra_oneclick_deposit_memo' => $memo,
+        'need_oneclick_poll' => !$skipOneClick,
+        'dest_chain' => $destChain !== '' ? $destChain : 'aptos',
+        'sendra_dest_chain' => $destChain !== '' ? $destChain : null,
+        'solana_destination' => $solDest !== '' ? $solDest : null,
+        'user_solana' => $solDest !== '' ? $solDest : null,
+        'virtual_bank' => $bank,
+        'bank_notified_via_webhook' => true,
+    ];
+
+    $userStmt = $aptosDb->prepare('SELECT aptos_address FROM users WHERE phone_number = :phone LIMIT 1');
+    $userStmt->execute(['phone' => $phone]);
+    $userRow = $userStmt->fetch(\PDO::FETCH_ASSOC);
+    if (is_array($userRow) && !empty($userRow['aptos_address'])) {
+        $meta['user_aptos'] = (string) $userRow['aptos_address'];
+    }
+
+    $pendingId = bin2hex(random_bytes(16));
+    $ins = $aptosDb->prepare("
+        INSERT INTO pending_transactions
+            (id, user_phone, tx_type, amount, currency, recipient_address, human_description, expires_at, status, created_at)
+        VALUES
+            (:id, :phone, 'onramp_oneclick_centiiv', :amount, 'USDC', :recipient, :meta, DATE_ADD(NOW(), INTERVAL 30 MINUTE), 'pending', NOW())
+    ");
+    $ins->execute([
+        'id' => $pendingId,
+        'phone' => $phone,
+        'amount' => '0',
+        'recipient' => $solDest !== '' ? $solDest : ($stellarDest !== '' ? $stellarDest : ''),
+        'meta' => json_encode($meta, JSON_UNESCAPED_UNICODE),
+    ]);
+
+    $clearCtx = $aptosDb->prepare("
+        UPDATE users SET chat_context = NULL
+        WHERE phone_number = :phone AND chat_context LIKE '%\"flow\":\"buy\"%'
+    ");
+    $clearCtx->execute(['phone' => $phone]);
+
+    $destLine = 'your Sendra wallet';
+    if ($destChain === 'solana') {
+        $destLine = $solDest !== ''
+            ? ('your Solana wallet (`' . (strlen($solDest) > 12 ? (substr($solDest, 0, 4) . '…' . substr($solDest, -4)) : $solDest) . '`)')
+            : 'your Solana wallet';
+    } elseif ($destChain === 'stellar') {
+        $destLine = 'your Sendra Stellar wallet';
+    }
+    $wa = new WhatsAppService($accessToken, $aptosPhoneId);
+    $payDisplay = number_format($payNgn, 0, '.', ',');
+    $wa->sendMessage(
+        $phone,
+        "🏦 *Pay to complete your buy*\n\n" .
+        "Transfer *exactly ₦{$payDisplay}* to:\n\n" .
+        "*{$bank['account_name']}*\n" .
+        "`{$bank['account_number']}`\n" .
+        "*{$bank['bank_name']}*\n\n" .
+        "Order: `{$orderId}`\n" .
+        "You receive crypto → {$destLine}\n\n" .
+        "⏱ Complete payment within *30 minutes*. We’ll notify you when crypto lands."
+    );
+
+        error_log('CENTIIV WEBHOOK sendra buy: bank details sent for order ' . $orderId . ' phone ' . $phone);
+    } catch (\Throwable $e) {
+        error_log('CENTIIV WEBHOOK sendra buy: bank notify failed — ' . $e->getMessage());
+    }
+}
+
 function centiiv_sendra_find_onramp_pending(\PDO $aptosDb, string $orderLabel): ?array
 {
     $orderLabel = trim($orderLabel);
@@ -1291,7 +2247,7 @@ function centiiv_sendra_find_onramp_pending(\PDO $aptosDb, string $orderLabel): 
         SELECT id, user_phone, recipient_address, human_description, status
         FROM pending_transactions
         WHERE tx_type = 'onramp_oneclick_centiiv'
-          AND status IN ('awaiting_payment', 'confirmed')
+          AND status IN ('pending', 'confirmed')
           AND expires_at > NOW()
     ");
     $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
@@ -1320,7 +2276,12 @@ function centiiv_sendra_mark_onramp_paid(\PDO $aptosDb, string $orderLabel): voi
         $meta = [];
     }
     $meta['centiiv_paid_at'] = gmdate('c');
-    $meta['need_oneclick_poll'] = true;
+    $stellarBuy = \App\Services\SendraIndexerDepositNotifyService::skipsOneClickOnrampMeta($meta);
+    if ($stellarBuy) {
+        $meta['need_oneclick_poll'] = false;
+    } else {
+        $meta['need_oneclick_poll'] = true;
+    }
     $u = $aptosDb->prepare('UPDATE pending_transactions SET human_description = ?, status = ? WHERE id = ?');
     $u->execute([json_encode($meta, JSON_UNESCAPED_UNICODE), 'confirmed', (string) $row['id']]);
 }
@@ -1402,5 +2363,35 @@ function centiiv_handle_logistics_rider_withdraw_webhook(
             "⚠️ *Withdrawal failed*\n\n"
             . "Order `{$orderLabel}` could not be completed. Your wallet was refunded. Try *withdraw* again or contact support."
         );
+    }
+}
+
+/**
+ * After Centiiv pays the shared Sendra G + memo, move USDC to the user's C wallet.
+ */
+function centiiv_sendra_try_stellar_pool_sweep(
+    array $event,
+    \PDO $aptosDb,
+    string $phone,
+    string $recvDisplay,
+    string $orderLabel,
+    \App\Services\WhatsAppService $wa
+): void {
+    $meta = centiiv_sendra_extract_metadata($event);
+    $pendingMeta = centiiv_sendra_pending_meta_for_order($aptosDb, $orderLabel);
+    if (!is_array($pendingMeta)) {
+        $pendingMeta = [];
+    }
+    $dest = strtolower((string) ($meta['sendra_dest_chain'] ?? $pendingMeta['dest_chain'] ?? ''));
+    if ($dest !== 'stellar') {
+        return;
+    }
+    // Do not sweep by quote amount: pool USDC is fungible. Horizon memo indexer
+    // credits the exact inbound payment to the matching C wallet (1:1).
+    try {
+        $stats = (new \App\Services\SendraStellarPoolIndexerService($aptosDb, $wa))->run();
+        error_log('CENTIIV WEBHOOK stellar pool index order=' . $orderLabel . ' ' . json_encode($stats));
+    } catch (\Throwable $e) {
+        error_log('CENTIIV WEBHOOK stellar pool index failed order=' . $orderLabel . ' ' . $e->getMessage());
     }
 }

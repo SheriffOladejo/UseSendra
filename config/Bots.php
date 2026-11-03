@@ -18,7 +18,7 @@ $logReplica = $_ENV['LOGISTICS_DB_REPLICA_NAME'] ?? getenv('LOGISTICS_DB_REPLICA
 return [
     $aptosPhoneId => [
         'name' => 'aptos',
-        'controller' => 'MessageController',
+        'controller' => 'AptosV2Kernel',
         'db_config' => [
             'live' => [
                 'host' => $aptosHost,

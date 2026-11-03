@@ -6,6 +6,7 @@ ini_set('display_errors', 1);
 require __DIR__ . '/vendor/autoload.php';
 require __DIR__ . '/config/bootstrap_env.php';
 
+use App\Services\AptosLabsClient;
 use App\Services\NoditIndexerDepositService;
 use App\Services\WebhookAuthService;
 
@@ -14,16 +15,17 @@ $DB_NAME = $_ENV['APTOS_DB_NAME'] ?? getenv('APTOS_DB_NAME') ?: 'sendra_db';
 $DB_USER = $_ENV['APTOS_DB_USER'] ?? getenv('APTOS_DB_USER') ?: 'developer';
 $DB_PASS = $_ENV['APTOS_DB_PASS'] ?? getenv('APTOS_DB_PASS') ?: '';
 
+$aptosLabs = new AptosLabsClient();
 $noditIndexer = new NoditIndexerDepositService();
 $USE_NODIT_INDEXER = $noditIndexer->isConfigured()
-    && strtolower(trim((string) ($_ENV['NODIT_USE_INDEXER'] ?? getenv('NODIT_USE_INDEXER') ?: '1'))) !== '0';
+    && strtolower(trim((string) ($_ENV['NODIT_USE_INDEXER'] ?? getenv('NODIT_USE_INDEXER') ?? '1'))) !== '0';
 
 $APTOS_GRAPHQL_ENDPOINT = $USE_NODIT_INDEXER
     ? $noditIndexer->getGraphqlUrl()
-    : (trim((string) ($_ENV['APTOS_GRAPHQL_URL'] ?? getenv('APTOS_GRAPHQL_URL') ?: ''))
-        ?: 'https://api.testnet.aptoslabs.com/v1/graphql');
-$WHATSAPP_WEBHOOK_URL = 'https://coinectra.stipendly.app/webhook.php?action=deposit';
-$LOG_FILE = '/var/www/html/coinectra/aptos-indexer-webhook.log';
+    : $aptosLabs->getGraphqlUrl();
+$publicBase = rtrim((string) ($_ENV['SENDRA_PUBLIC_BASE_URL'] ?? getenv('SENDRA_PUBLIC_BASE_URL') ?: 'https://usesendra.com'), '/');
+$WHATSAPP_WEBHOOK_URL = $publicBase . '/webhook.php?action=deposit';
+$LOG_FILE = '/var/www/sendra/app/var/log/aptos-indexer-webhook.log';
 
 // Token metadata addresses
 $TOKEN_METADATA = [
@@ -56,11 +58,87 @@ function getSendraWalletAddresses() {
     return is_array($rows) ? $rows : [];
 }
 
+/** Wallets with open/recent buy — small set for Nodit lookback (avoids GraphQL time limits). */
+function getOnrampLookbackWalletAddresses(): array
+{
+    $pdo = getDB();
+    if (!$pdo) {
+        return [];
+    }
+
+    $addrs = [];
+    $stmt = $pdo->query(
+        "SELECT DISTINCT u.aptos_address
+         FROM pending_transactions p
+         INNER JOIN users u ON u.phone_number = p.user_phone
+         WHERE p.tx_type IN ('onramp_oneclick_centiiv', 'onramp_daya_aptos')
+           AND p.created_at > DATE_SUB(NOW(), INTERVAL 48 HOUR)
+           AND u.aptos_address IS NOT NULL AND u.aptos_address != ''"
+    );
+    if ($stmt) {
+        foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $a) {
+            if (is_string($a) && $a !== '') {
+                $addrs[] = $a;
+            }
+        }
+    }
+
+    return array_values(array_unique($addrs));
+}
+
+/** Remove only versions clearly above chain head (no per-row REST calls). */
+function purgeInvalidTrackerVersions(): int
+{
+    $pdo = getDB();
+    if (!$pdo) {
+        return 0;
+    }
+
+    $ledgerHead = aptosMainnetLedgerVersion();
+    if ($ledgerHead === null) {
+        return 0;
+    }
+
+    $cutoff = $ledgerHead + 1000;
+    $stmt = $pdo->prepare('DELETE FROM aptos_webhook_tracker WHERE transaction_version > ?');
+    $stmt->execute([$cutoff]);
+    $removed = (int) $stmt->rowCount();
+    if ($removed > 0) {
+        logMessage("Purged {$removed} tracker row(s) above ledger head {$ledgerHead}");
+    }
+
+    return $removed;
+}
+
+function maxValidTrackedVersion(): int
+{
+    $pdo = getDB();
+    if (!$pdo) {
+        return 0;
+    }
+
+    $ledgerHead = aptosMainnetLedgerVersion();
+    if ($ledgerHead === null) {
+        $stmt = $pdo->query('SELECT COALESCE(MAX(transaction_version), 0) FROM aptos_webhook_tracker');
+
+        return (int) $stmt->fetchColumn();
+    }
+
+    $stmt = $pdo->prepare(
+        'SELECT COALESCE(MAX(transaction_version), 0) FROM aptos_webhook_tracker WHERE transaction_version <= ?'
+    );
+    $stmt->execute([$ledgerHead]);
+
+    return (int) $stmt->fetchColumn();
+}
+
 function queryAptosIndexer($lastProcessedVersion = 0) {
-    global $USE_NODIT_INDEXER, $noditIndexer;
+    global $USE_NODIT_INDEXER, $noditIndexer, $aptosLabs;
 
     logMessage('Querying indexer from version ' . $lastProcessedVersion
-        . ($USE_NODIT_INDEXER ? ' (Nodit GraphQL, Sendra wallets only)' : ' (public Aptos Labs)'));
+        . ($USE_NODIT_INDEXER
+            ? ' (Nodit GraphQL, Sendra wallets only)'
+            : ' (Aptos Labs GraphQL' . ($aptosLabs->hasApiKey() ? ', Geomi API key' : ', anonymous — set APTOS_NODE_API_KEY') . ', Sendra wallets only)'));
 
     if ($USE_NODIT_INDEXER) {
         $owners = getSendraWalletAddresses();
@@ -76,10 +154,36 @@ function queryAptosIndexer($lastProcessedVersion = 0) {
             return null;
         }
 
+        $lookbackSec = (int) ($_ENV['NODIT_INDEXER_LOOKBACK_SECONDS'] ?? getenv('NODIT_INDEXER_LOOKBACK_SECONDS') ?: 86400);
+        if ($lookbackSec > 0 && $lastProcessedVersion > 0) {
+            $lookbackOwners = getOnrampLookbackWalletAddresses();
+            if ($lookbackOwners === []) {
+                $lookbackOwners = $owners;
+            }
+            $missed = $noditIndexer->fetchDepositsBelowCursorRecent($lookbackOwners, (int) $lastProcessedVersion, $lookbackSec, 30);
+            if ($missed === null) {
+                logMessage('Nodit lookback error: ' . ($noditIndexer->getLastError() ?? 'unknown'));
+            } elseif ($missed !== []) {
+                logMessage('Lookback found ' . count($missed) . ' deposit(s) below cursor ' . $lastProcessedVersion);
+                $seen = [];
+                foreach ($activities as $a) {
+                    $seen[(string) ($a['transaction_version'] ?? '')] = true;
+                }
+                foreach ($missed as $m) {
+                    $v = (string) ($m['transaction_version'] ?? '');
+                    if ($v !== '' && !isset($seen[$v])) {
+                        $activities[] = $m;
+                        $seen[$v] = true;
+                    }
+                }
+                usort($activities, fn ($a, $b) => (int) $a['transaction_version'] <=> (int) $b['transaction_version']);
+            }
+        }
+
         return $activities;
     }
 
-    global $APTOS_GRAPHQL_ENDPOINT, $TOKEN_METADATA;
+    global $aptosLabs, $TOKEN_METADATA;
 
     $query = <<<'GRAPHQL'
 query GetFungibleAssetActivities($where: fungible_asset_activities_bool_exp) {
@@ -100,48 +204,165 @@ query GetFungibleAssetActivities($where: fungible_asset_activities_bool_exp) {
 }
 GRAPHQL;
 
+    // Filter by Sendra wallet addresses from DB (avoids chain-wide scanning).
+    $owners = getSendraWalletAddresses();
+    if ($owners === []) {
+        logMessage('No Sendra wallet addresses in DB');
+        return [];
+    }
+    $owners = array_values(array_unique(array_filter($owners)));
+
     $assetTypes = array_keys($TOKEN_METADATA);
-    $variables = [
-        'where' => [
-            'asset_type' => ['_in' => $assetTypes],
-            'type' => ['_eq' => '0x1::fungible_asset::Deposit'],
-            'is_transaction_success' => ['_eq' => true],
-            'transaction_version' => ['_gt' => (string) $lastProcessedVersion],
-        ],
+    $baseWhere = [
+        'asset_type' => ['_in' => $assetTypes],
+        'type' => ['_eq' => '0x1::fungible_asset::Deposit'],
+        'is_transaction_success' => ['_eq' => true],
+        'transaction_version' => ['_gt' => (string) $lastProcessedVersion],
     ];
 
-    $ch = curl_init($APTOS_GRAPHQL_ENDPOINT);
-    curl_setopt_array($ch, [
-        CURLOPT_POST => true,
-        CURLOPT_POSTFIELDS => json_encode(['query' => $query, 'variables' => $variables]),
-        CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_TIMEOUT => 30,
-    ]);
-    $response = curl_exec($ch);
-    $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    if (curl_errno($ch)) {
-        logMessage('cURL Error: ' . curl_error($ch));
-        curl_close($ch);
+    // Chunk owner list to keep the GraphQL payload reasonable.
+    // Safety: GraphQL uses `limit: 100` ordered asc. If a chunk has >100 results,
+    // it truncates at some max version. To avoid skipping deposits in other chunks,
+    // we compute a "safe cursor" as the minimum maxVersion returned across chunks,
+    // then only keep activities with transaction_version <= safeCursor.
+    $ownerChunkSize = 80;
+    $allActivities = [];
+    $chunkMaxVersions = [];
 
-        return null;
+    foreach (array_chunk($owners, $ownerChunkSize) as $ownerChunk) {
+        $variables = [
+            'where' => array_merge($baseWhere, [
+                'owner_address' => ['_in' => array_values($ownerChunk)],
+            ]),
+        ];
+
+        $result = $aptosLabs->graphql($query, $variables, 30);
+        if ($result['curl_error'] !== null) {
+            logMessage('cURL Error: ' . $result['curl_error']);
+
+            return null;
+        }
+
+        $httpCode = $result['http_code'];
+        $response = $result['body'];
+        if ($httpCode !== 200) {
+            logMessage("HTTP Error: $httpCode - Response: $response");
+
+            return null;
+        }
+
+        $data = json_decode($response, true);
+        if (!isset($data['data']['fungible_asset_activities'])) {
+            logMessage('Invalid response structure: ' . $response);
+
+            return null;
+        }
+
+        $chunkActivities = $data['data']['fungible_asset_activities'];
+        if (!is_array($chunkActivities) || $chunkActivities === []) {
+            continue;
+        }
+
+        $chunkMax = 0;
+        foreach ($chunkActivities as $a) {
+            if (!isset($a['transaction_version'])) continue;
+            $v = (int) $a['transaction_version'];
+            if ($v > $chunkMax) $chunkMax = $v;
+        }
+        if ($chunkMax > 0) {
+            $chunkMaxVersions[] = $chunkMax;
+        }
+
+        $allActivities = array_merge($allActivities, $chunkActivities);
     }
-    curl_close($ch);
 
-    if ($httpCode !== 200) {
-        logMessage("HTTP Error: $httpCode - Response: $response");
-
-        return null;
+    if ($allActivities === []) {
+        return [];
     }
 
-    $data = json_decode($response, true);
-    if (!isset($data['data']['fungible_asset_activities'])) {
-        logMessage('Invalid response structure: ' . $response);
+    $safeCursor = (int) min($chunkMaxVersions ?: [(int) $lastProcessedVersion]);
 
-        return null;
+    $filtered = array_values(array_filter($allActivities, function ($a) use ($safeCursor) {
+        if (!isset($a['transaction_version'])) return false;
+        return ((int) $a['transaction_version']) <= $safeCursor;
+    }));
+
+    usort($filtered, fn ($a, $b) => (int) $a['transaction_version'] <=> (int) $b['transaction_version']);
+
+    return enrichActivitiesWithSenderAndHash($filtered);
+}
+
+/**
+ * fungible_asset_activities has no sender/hash. Attach both:
+ *   - sender via GraphQL user_transactions (by version)
+ *   - transaction_hash via REST /transactions/by_version
+ *
+ * @param list<array<string, mixed>> $activities
+ * @return list<array<string, mixed>>
+ */
+function enrichActivitiesWithSenderAndHash(array $activities) {
+    global $aptosLabs;
+
+    if ($activities === []) {
+        return $activities;
     }
 
-    return $data['data']['fungible_asset_activities'];
+    $versions = array_values(array_unique(array_filter(array_map(
+        fn ($a) => (string) ($a['transaction_version'] ?? ''),
+        $activities
+    ))));
+    if ($versions === []) {
+        return $activities;
+    }
+
+    // Senders: GraphQL user_transactions (batched)
+    $senders = [];
+    $senderQuery = <<<'GRAPHQL'
+query TxSenders($versions: [bigint!]!) {
+  user_transactions(where: { version: { _in: $versions } }) {
+    version
+    sender
+  }
+}
+GRAPHQL;
+
+    foreach (array_chunk($versions, 50) as $chunk) {
+        $result = $aptosLabs->graphql($senderQuery, ['versions' => array_map('intval', $chunk)], 30);
+        if ($result['http_code'] !== 200) {
+            continue;
+        }
+        $data = json_decode($result['body'], true);
+        foreach ($data['data']['user_transactions'] ?? [] as $tx) {
+            $v = (string) ($tx['version'] ?? '');
+            $s = $tx['sender'] ?? '';
+            if ($v !== '' && is_string($s) && $s !== '') {
+                $senders[$v] = $s;
+            }
+        }
+    }
+
+    // Hashes: REST by version
+    $hashes = [];
+    foreach ($versions as $version) {
+        $result = $aptosLabs->restGet("transactions/by_version/{$version}", 10);
+        $tx = json_decode($result['body'], true);
+        if (is_array($tx) && !empty($tx['hash'])) {
+            $hashes[$version] = (string) $tx['hash'];
+        }
+    }
+
+    foreach ($activities as &$row) {
+        $v = (string) ($row['transaction_version'] ?? '');
+        if (isset($senders[$v])) {
+            $row['sender'] = $senders[$v];
+        }
+        if (isset($hashes[$v])) {
+            $row['transaction_hash'] = $hashes[$v];
+        }
+    }
+    unset($row);
+
+    return $activities;
 }
 
 // Get database connection
@@ -158,21 +379,106 @@ function getDB() {
     }
 }
 
-// Get last processed version
+function aptosMainnetLedgerVersion(): ?int
+{
+    global $aptosLabs;
+
+    $net = explorerNetworkParam();
+    if ($net !== 'mainnet') {
+        return null;
+    }
+
+    $result = $aptosLabs->restGet('', 10);
+    $data = json_decode($result['body'], true);
+    if (!is_array($data) || empty($data['ledger_version'])) {
+        return null;
+    }
+
+    return (int) $data['ledger_version'];
+}
+
+function aptosTxVersionExistsOnChain(int $version): bool
+{
+    global $aptosLabs;
+
+    if ($version <= 0) {
+        return false;
+    }
+
+    $result = $aptosLabs->restGet("transactions/by_version/{$version}", 8);
+    $code = $result['http_code'];
+
+    if ($code === 429 || $code === 503 || $code === 0) {
+        return true;
+    }
+
+    if ($code !== 200) {
+        return false;
+    }
+
+    $data = json_decode($result['body'], true);
+
+    return is_array($data) && isset($data['version']);
+}
+
+// Get last processed version (reconcile if cursor ran ahead of chain / missed low versions)
 function getLastProcessedVersion() {
     $pdo = getDB();
     if (!$pdo) return 0;
+
+    purgeInvalidTrackerVersions();
     
     $stmt = $pdo->query("SELECT last_processed_version FROM aptos_webhook_settings WHERE id = 1");
     $result = $stmt->fetch(PDO::FETCH_ASSOC);
-    
-    return $result ? (int)$result['last_processed_version'] : 0;
+    $stored = $result ? (int)$result['last_processed_version'] : 0;
+
+    $ledgerHead = aptosMainnetLedgerVersion();
+    $maxValid = maxValidTrackedVersion();
+
+    if ($ledgerHead !== null && $stored > $ledgerHead + 1000) {
+        $reconciled = $maxValid > 0 ? min($maxValid, $ledgerHead) : max(0, $ledgerHead - 500000);
+        logMessage("Reconciling cursor {$stored} down to {$reconciled} (ledger head {$ledgerHead}, max valid tracked {$maxValid})");
+        updateLastProcessedVersion($reconciled);
+
+        return $reconciled;
+    }
+
+    if ($stored > 0 && !aptosTxVersionExistsOnChain($stored)) {
+        $fallback = $maxValid > 0 ? $maxValid : ($ledgerHead ?? 0);
+        logMessage("Cursor {$stored} not on chain; fallback to {$fallback}");
+        updateLastProcessedVersion($fallback);
+
+        return $fallback;
+    }
+
+    if ($stored === 0 && $ledgerHead !== null && trackerRowCount() === 0) {
+        logMessage("Empty tracker; seeding cursor to ledger head {$ledgerHead}");
+        updateLastProcessedVersion($ledgerHead);
+
+        return $ledgerHead;
+    }
+
+    if ($maxValid > 0 && $stored > $maxValid + 50000) {
+        logMessage("Cursor {$stored} ahead of max valid tracked {$maxValid}; aligning");
+        updateLastProcessedVersion($maxValid);
+
+        return $maxValid;
+    }
+
+    return $stored;
 }
 
 // Update last processed version
 function updateLastProcessedVersion($version) {
     $pdo = getDB();
     if (!$pdo) return;
+
+    $version = (int) $version;
+
+    $ledgerHead = aptosMainnetLedgerVersion();
+    if ($ledgerHead !== null && $version > $ledgerHead) {
+        $version = $ledgerHead;
+    }
     
     $stmt = $pdo->prepare("UPDATE aptos_webhook_settings SET last_processed_version = :version WHERE id = 1");
     $stmt->execute(['version' => $version]);

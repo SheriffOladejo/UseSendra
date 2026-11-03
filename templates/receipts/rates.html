@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=432, initial-scale=1" />
+  <title>Sendra rate card</title>
+  <style>
+    @font-face {
+      font-family: 'Inter';
+      src: url('{{font_regular_uri}}') format('truetype');
+      font-weight: 400;
+      font-style: normal;
+    }
+    @font-face {
+      font-family: 'Inter';
+      src: url('{{font_bold_uri}}') format('truetype');
+      font-weight: 700;
+      font-style: normal;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      width: 432px;
+      height: 920px;
+      background: #eef1ee;
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      color: #0f3e2e;
+      -webkit-font-smoothing: antialiased;
+      position: relative;
+      overflow: hidden;
+    }
+    body::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      opacity: 0.45;
+      background-image:
+        radial-gradient(#c5cdc8 0.7px, transparent 0.7px),
+        radial-gradient(#d5dbd6 0.6px, transparent 0.6px);
+      background-size: 7px 7px, 11px 11px;
+      background-position: 0 0, 3px 5px;
+    }
+    .wrap {
+      position: relative;
+      z-index: 1;
+      padding: 28px 22px 18px;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 22px;
+    }
+    .brand {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .logo-img {
+      height: 22px;
+      width: auto;
+      display: block;
+      object-fit: contain;
+    }
+    h1 {
+      font-size: 28px;
+      font-weight: 700;
+      line-height: 1.12;
+      letter-spacing: -0.03em;
+      color: #163c32;
+    }
+    h1 span {
+      color: #2eb28c;
+    }
+    .date {
+      padding-top: 6px;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      color: #2eb28c;
+      white-space: nowrap;
+    }
+    .cols {
+      display: grid;
+      grid-template-columns: 1.45fr 0.75fr 0.75fr;
+      gap: 8px;
+      padding: 0 16px 10px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      color: #2eb28c;
+    }
+    .cols span:nth-child(2),
+    .cols span:nth-child(3) {
+      text-align: right;
+    }
+    .list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      flex: 1;
+    }
+    .rate-row {
+      display: grid;
+      grid-template-columns: 1.45fr 0.75fr 0.75fr;
+      align-items: center;
+      gap: 8px;
+      background: #e3e8e4;
+      border-radius: 18px;
+      min-height: 58px;
+      padding: 8px 16px;
+    }
+    .pair-cell {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+    .icons {
+      position: relative;
+      width: 44px;
+      height: 28px;
+      flex-shrink: 0;
+    }
+    .badge {
+      position: absolute;
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      border: 1.5px solid #eef1ee;
+      background-size: cover;
+      background-position: center;
+      box-shadow: 0 1px 2px rgba(15, 62, 46, 0.12);
+    }
+    .badge:first-child { left: 0; top: 1px; z-index: 1; }
+    .badge:last-child { right: 0; top: 1px; z-index: 2; }
+    .pair-name {
+      font-size: 13px;
+      font-weight: 700;
+      color: #163c32;
+      white-space: nowrap;
+    }
+    .num {
+      font-size: 13px;
+      font-weight: 700;
+      color: #163c32;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+    .footer {
+      text-align: center;
+      margin-top: 18px;
+      font-size: 12px;
+      font-weight: 600;
+      color: #6e7686;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+    .deco {
+      position: absolute;
+      right: 10px;
+      bottom: 8px;
+      width: 72px;
+      height: 72px;
+      opacity: 0.95;
+    }
+
+    .coin-usdc { background-image: url('{{usdc_uri}}'); background-color: #2775ca; }
+    .coin-usdt, .coin-usdt0 { background-image: url('{{usdt_uri}}'); background-color: #26a17b; }
+
+    .flag-ngn { background: linear-gradient(90deg, #008751 0 33%, #fff 33% 66%, #008751 66% 100%); }
+    .flag-ghs { background: linear-gradient(#ce1126 0 33%, #fcd116 33% 66%, #006b3f 66% 100%); }
+    .flag-kes { background: linear-gradient(#000 0 33%, #bb0000 33% 66%, #006600 66% 100%); }
+    .flag-zar { background: linear-gradient(180deg, #007749 0 34%, #000 34% 38%, #de3831 38% 62%, #000 62% 66%, #002395 66% 100%); }
+    .flag-xof { background: linear-gradient(90deg, #f77f00 0 33%, #fff 33% 66%, #009e60 66% 100%); }
+    .flag-xaf { background: linear-gradient(90deg, #007a5e 0 33%, #ce1126 33% 66%, #fcd116 66% 100%); }
+    .flag-etb { background: linear-gradient(#078930 0 33%, #fcd116 33% 66%, #da121a 66% 100%); }
+    .flag-ugx { background: linear-gradient(#000 0 33%, #fcdc04 33% 66%, #d90000 66% 100%); }
+    .flag-rwf { background: linear-gradient(#00a1de 0 50%, #fad201 50% 75%, #20603d 75% 100%); }
+    .flag-egp { background: linear-gradient(#ce1126 0 33%, #fff 33% 66%, #000 66% 100%); }
+    .flag-cdf { background: linear-gradient(135deg, #007fff 0 70%, #ce1025 70% 78%, #f7d618 78% 100%); }
+    .flag-xx { background: #0f3e2e; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="header">
+      <div class="brand">
+        <img class="logo-img" src="{{logo_uri}}" alt="Sendra" />
+        <h1>Sendra<br />Rate <span>Card</span></h1>
+      </div>
+      <div class="date">{{date_label}}</div>
+    </div>
+
+    <div class="cols">
+      <span>PAIRS</span>
+      <span>BUY</span>
+      <span>SELL</span>
+    </div>
+
+    <div class="list">
+      {{rows_html}}
+    </div>
+
+    <div class="footer">usesendra.com</div>
+  </div>
+</body>
+</html>

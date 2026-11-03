@@ -19,7 +19,8 @@ $DB_USER = $_ENV['APTOS_DB_USER'] ?? getenv('APTOS_DB_USER') ?: 'developer';
 $DB_PASS = $_ENV['APTOS_DB_PASS'] ?? getenv('APTOS_DB_PASS') ?: '';
 
 // WhatsApp webhook URL
-$WHATSAPP_WEBHOOK_URL = 'https://coinectra.stipendly.app/webhook.php?action=deposit';
+$publicBase = rtrim((string) ($_ENV['SENDRA_PUBLIC_BASE_URL'] ?? getenv('SENDRA_PUBLIC_BASE_URL') ?: 'https://usesendra.com'), '/');
+$WHATSAPP_WEBHOOK_URL = $publicBase . '/webhook.php?action=deposit';
 
 // Known coin types
 $COIN_TYPES = [

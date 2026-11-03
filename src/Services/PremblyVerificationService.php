@@ -59,6 +59,42 @@ final class PremblyVerificationService
     }
 
     /**
+     * NIN matched against a live-captured face image (base64 or URL).
+     *
+     * @return array{success: bool, http_code: int, data: array<string, mixed>, raw: ?string, error: ?string}
+     */
+    public function verifyNinWithFace(string $nin, string $image): array
+    {
+        $digits = preg_replace('/\D+/', '', trim($nin)) ?? '';
+
+        return $this->postJson('/verification/nin_w_face', [
+            'number' => $digits,
+            'image' => $image,
+        ]);
+    }
+
+    /**
+     * Standalone face liveness check on a live-captured image.
+     *
+     * @return array{success: bool, http_code: int, data: array<string, mixed>, raw: ?string, error: ?string}
+     */
+    public function verifyFaceLiveness(string $image): array
+    {
+        return $this->postJson('/verification/biometrics/face/liveliness_check', [
+            'image' => $image,
+        ]);
+    }
+
+    /**
+     * @param array<string, mixed> $body
+     * @return array{success: bool, http_code: int, data: array<string, mixed>, raw: ?string, error: ?string}
+     */
+    public function verifyAddress(array $body): array
+    {
+        return $this->postJson('/verification/address', $body);
+    }
+
+    /**
      * @param array<string, mixed> $body
      * @return array{success: bool, http_code: int, data: array<string, mixed>, raw: ?string, error: ?string}
      */

@@ -1,23 +1,31 @@
-# User uploads (driver/item photos, QR codes, etc.)
+# User uploads
 /uploads/
 
-# Environment and secrets
+# Environment and secrets — never commit real or example env files
 .env
 .env.*
-!.env.example
+*.env
+**/.env
+**/.env.*
+**/.env.operator
 aptos-service/.env
+stellar-service/.env
+arc-service/.env
+freelancer-bid-bot/
+hyperliquid-smart-money-trader/
 
-# Local database dumps and rotation artifacts (sensitive)
+# Local database dumps and rotation artifacts
 backups/
 *_backup.sql
 *.sql.gz
 wallet_rotation_audit_*.json
 
-# Node / frontend build
+# Dependencies and frontend build output
 node_modules/
 **/node_modules/
 admin/dist/
-hyperliquid-smart-money-trader/dashboard/dist/
+aptos-admin/dist/
+aptos-service/dist/
 
 # Python
 .venv/
@@ -26,35 +34,43 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .pytest_cache/
-hyperliquid-smart-money-trader/bot/results.json
 
 # Runtime caches and local bot state
 var/centiiv_banks_cache.json
 var/sendra_offramp_learned.json
+var/ramp_health.json
 var/receipts/*
 !var/receipts/.gitkeep
-hyperliquid-smart-money-trader/smart_money.json
+var/log/*
+!var/log/.gitkeep
 
 # Logs
 *.log
 logs/
-aptos-indexer-webhook.log
 
-# Runtime health cache (from cron_ramp_health.php)
-var/ramp_health.json
+# Sensitive / private docs (keep policy templates only)
+docs/sendra-kyc-two-users.pdf
+docs/sendra-kyc-package-*.zip
 
-# OS
+# OS / IDE
 .DS_Store
 Thumbs.db
-
-# IDE / editor
 .idea/
 *.swp
 *.swo
 *~
 
-# PHP tooling (if added later)
+# PHP tooling
 .phpunit.result.cache
 .php-cs-fixer.cache
 coverage/
 clover.xml
+
+# Runtime / PII caches — never publish
+var/sendra_intermediary_disburse/
+var/sendra_centiiv_pending_orders/
+var/sendra_buy_opening/
+var/exports/
+var/**/*.lock
+var/**/*.json
+!var/**/.gitkeep

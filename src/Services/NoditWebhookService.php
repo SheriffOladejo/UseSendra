@@ -47,7 +47,7 @@ class NoditWebhookService
         $this->apiKey = trim((string) ($_ENV['NODIT_API_KEY'] ?? getenv('NODIT_API_KEY') ?: ''));
         $this->listenerUrl = trim((string) ($_ENV['NODIT_WEBHOOK_LISTENER_URL'] ?? getenv('NODIT_WEBHOOK_LISTENER_URL') ?: ''));
         if ($this->listenerUrl === '') {
-            $base = rtrim((string) ($_ENV['SENDRA_PUBLIC_BASE_URL'] ?? getenv('SENDRA_PUBLIC_BASE_URL') ?: 'https://coinectra.stipendly.app'), '/');
+            $base = rtrim((string) ($_ENV['SENDRA_PUBLIC_BASE_URL'] ?? getenv('SENDRA_PUBLIC_BASE_URL') ?: 'https://usesendra.com'), '/');
             $this->listenerUrl = $base . '/nodit.php';
         }
 

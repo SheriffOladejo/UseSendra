@@ -30,5 +30,15 @@ Run every day at 02:10 (UTC server time):
 ### Optional overrides
 Set these in the environment (or in `.env`):
 - `SENDRA_DB_BACKUP_DIR=/var/backups/sendra/mysql`
-- `SENDRA_DB_BACKUP_RETENTION_DAYS=14`
+- `SENDRA_DB_BACKUP_RETENTION_DAYS=183`
+
+## Cron: Stellar pool G+memo indexer
+
+Credits classic USDC paid to Sendra’s shared Stellar G (with the user’s memo) into their C wallet.
+
+```cron
+* * * * * /var/www/html/coinectra/scripts/run_stellar_pool_index_15s.sh >> /var/log/sendra_stellar_pool_index.log 2>&1
+```
+
+Disable with `SENDRA_STELLAR_POOL_INDEX=0`. Apply `migrations/20260916_stellar_pool_deposits.sql` first.`
 

@@ -44,6 +44,42 @@ class User
         }
     }
 
+    public function findByStellarAddress($stellarAddress)
+    {
+        try {
+            $stmt = $this->db->prepare("SELECT * FROM {$this->table} WHERE stellar_address = :stellar_address");
+            $stmt->execute(['stellar_address' => $stellarAddress]);
+            return $stmt->fetch(PDO::FETCH_ASSOC);
+        } catch (\PDOException $e) {
+            error_log("Error finding user by Stellar address: " . $e->getMessage());
+            return false;
+        }
+    }
+
+    public function findByArcAddress($arcAddress)
+    {
+        try {
+            $stmt = $this->db->prepare("SELECT * FROM {$this->table} WHERE LOWER(arc_address) = LOWER(:arc_address) LIMIT 1");
+            $stmt->execute(['arc_address' => $arcAddress]);
+            return $stmt->fetch(PDO::FETCH_ASSOC);
+        } catch (\PDOException $e) {
+            error_log("Error finding user by Arc address: " . $e->getMessage());
+            return false;
+        }
+    }
+
+    public function findByStellarDepositMemo($memo)
+    {
+        try {
+            $stmt = $this->db->prepare("SELECT * FROM {$this->table} WHERE stellar_deposit_memo = :memo LIMIT 1");
+            $stmt->execute(['memo' => $memo]);
+            return $stmt->fetch(PDO::FETCH_ASSOC);
+        } catch (\PDOException $e) {
+            error_log("Error finding user by Stellar memo: " . $e->getMessage());
+            return false;
+        }
+    }
+
     /**
      * Create new user
      * Supports both sendra-native (with encrypted key) and petra users

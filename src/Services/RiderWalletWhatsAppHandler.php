@@ -256,7 +256,7 @@ final class RiderWalletWhatsAppHandler
         if ($code === null) {
             $this->whatsapp->sendMessage(
                 $phone,
-                "❌ Could not match *{$bankGuess}* to a bank. Try again with the official name (e.g. *GTBank*, *Opay*, *Moniepoint*)."
+                SendraCentiivRampService::bankNameUnresolvedUserMessage($bankGuess)
             );
 
             return;
@@ -268,7 +268,7 @@ final class RiderWalletWhatsAppHandler
             $err = $verify['error'] ?? 'Verify failed';
             $this->whatsapp->sendMessage(
                 $phone,
-                "❌ Account could not be verified.\nCheck the 10 digits and bank name.\n({$err})"
+                SendraCentiivRampService::bankVerifyFailureUserMessage($err, $bankGuess, $account)
             );
 
             return;

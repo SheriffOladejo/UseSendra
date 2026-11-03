@@ -119,6 +119,32 @@ final class SendraOneClickService
     }
 
     /**
+     * Aptos USDT/USDC → current Centiiv pay-in asset (Solana USDC by default).
+     *
+     * @return array<string, mixed>
+     */
+    public static function buildAptosToOfframpUsdcQuoteBody(
+        string $originAssetId,
+        string $amountSmallestOrigin,
+        string $recipient,
+        string $refundAptos0x,
+        string $deadlineIsoUtc,
+        bool $dry = false,
+        ?int $quoteWaitingTimeMs = null
+    ): array {
+        return self::buildAptosToStellarUsdcQuoteBody(
+            $originAssetId,
+            SendraOfframpBridge::destAssetId(),
+            $amountSmallestOrigin,
+            $recipient,
+            $refundAptos0x,
+            $deadlineIsoUtc,
+            $dry,
+            $quoteWaitingTimeMs
+        );
+    }
+
+    /**
      * Buy path: Stellar USDC → Aptos USDT/USDC (Centiiv dispenses Stellar USDC to 1Click deposit).
      * Stellar origin requires depositMode MEMO (address + memo from live quote).
      *
@@ -149,6 +175,212 @@ final class SendraOneClickService
             'refundTo' => $refundStellarG,
             'refundType' => 'ORIGIN_CHAIN',
             'deadline' => $deadlineIsoUtc,
+            'quoteWaitingTimeMs' => $quoteWaitingTimeMs ?? self::resolveConfiguredQuoteWaitMs(),
+        ];
+    }
+
+    /**
+     * Buy path: Centiiv USDC on the current pay-in chain → Aptos USDT/USDC.
+     *
+     * @return array<string, mixed>
+     */
+    public static function buildOnrampToAptosQuoteBody(
+        string $destinationAptosAssetId,
+        string $amountSmallestOrigin,
+        string $recipientAptos0x,
+        string $deadlineIsoUtc,
+        bool $dry = false,
+        ?int $quoteWaitingTimeMs = null,
+        string $swapType = 'EXACT_INPUT'
+    ): array {
+        $originAsset = SendraOfframpBridge::destAssetId();
+        $refund = SendraOfframpBridge::originRefundAddress();
+        if (SendraOfframpBridge::isSolana()) {
+            return self::buildSolanaToAptosQuoteBody(
+                $originAsset,
+                $destinationAptosAssetId,
+                $amountSmallestOrigin,
+                $recipientAptos0x,
+                $refund,
+                $deadlineIsoUtc,
+                $dry,
+                $quoteWaitingTimeMs,
+                $swapType
+            );
+        }
+
+        return self::buildStellarToAptosQuoteBody(
+            $originAsset,
+            $destinationAptosAssetId,
+            $amountSmallestOrigin,
+            $recipientAptos0x,
+            $refund,
+            $deadlineIsoUtc,
+            $dry,
+            $quoteWaitingTimeMs,
+            $swapType
+        );
+    }
+
+    /**
+     * Deposit path: Solana USDT/USDC → Aptos USDT/USDC.
+     * Solana origin uses depositMode SIMPLE (1Click generates a temporary Solana deposit address).
+     *
+     * @return array<string, mixed>
+     */
+    public static function buildSolanaToAptosQuoteBody(
+        string $originSolanaAssetId,
+        string $destinationAptosAssetId,
+        string $amountSmallestSolana,
+        string $recipientAptos0x,
+        ?string $refundSolanaAddress = null,
+        ?string $deadlineIsoUtc = null,
+        bool $dry = false,
+        ?int $quoteWaitingTimeMs = null,
+        string $swapType = 'EXACT_INPUT'
+    ): array {
+        $refund = trim($refundSolanaAddress ?? (string) ($_ENV['SENDRA_SOLANA_REFUND_ADDRESS'] ?? getenv('SENDRA_SOLANA_REFUND_ADDRESS') ?: 'Dr2PgL5XTSjBsG8RjJE82dceaMKdxZFica3CrXbT3o8z'));
+        $deadline = $deadlineIsoUtc ?? gmdate('Y-m-d\TH:i:s\Z', time() + 50 * 60);
+
+        return [
+            'dry' => $dry,
+            'depositMode' => 'SIMPLE',
+            'swapType' => $swapType,
+            'slippageTolerance' => (int) ($_ENV['SENDRA_ONECLICK_SLIPPAGE_BPS'] ?? getenv('SENDRA_ONECLICK_SLIPPAGE_BPS') ?: 100),
+            'originAsset' => $originSolanaAssetId,
+            'depositType' => 'ORIGIN_CHAIN',
+            'destinationAsset' => $destinationAptosAssetId,
+            'amount' => $amountSmallestSolana,
+            'recipient' => $recipientAptos0x,
+            'recipientType' => 'DESTINATION_CHAIN',
+            'refundTo' => $refund,
+            'refundType' => 'ORIGIN_CHAIN',
+            'deadline' => $deadline,
+            'quoteWaitingTimeMs' => $quoteWaitingTimeMs ?? self::resolveConfiguredQuoteWaitMs(),
+        ];
+    }
+
+    /**
+     * Deposit path: Cross-chain (Solana/Stellar/Base/Arbitrum) USDT/USDC → Aptos USDT/USDC.
+     *
+     * @return array<string, mixed>
+     */
+    public static function buildCrossChainToAptosQuoteBody(
+        string $originNetwork,
+        string $originAsset,
+        string $destinationAptosAssetId,
+        string $amountSmallestOrigin,
+        string $recipientAptos0x,
+        ?string $refundAddress = null,
+        ?string $deadlineIsoUtc = null,
+        bool $dry = false,
+        ?int $quoteWaitingTimeMs = null,
+        string $swapType = 'EXACT_INPUT'
+    ): array {
+        $networkLower = strtolower(trim($originNetwork));
+        $assetUpper = strtoupper(trim($originAsset));
+
+        $originAssetId = match ($networkLower) {
+            'solana', 'sol' => $assetUpper === 'USDT'
+                ? 'nep141:sol-c800a4bd850783ccb82c2b2c7e84175443606352.omft.near'
+                : 'nep141:sol-5ce3bf3a31af18be40ba30f721101b4341690186.omft.near',
+            'stellar' => (string) ($_ENV['SENDRA_ONECLICK_STELLAR_USDC_ASSET_ID'] ?? getenv('SENDRA_ONECLICK_STELLAR_USDC_ASSET_ID') ?: 'nep245:v2_1.omni.hot.tg:1100_111bzQBB65GxAPAVoxqmMcgYo5oS3txhqs1Uh1cgahKQUeTUq1TJu'),
+            'base' => 'nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near',
+            'arbitrum', 'arb' => 'nep141:arb-0xaf88d065e77c8cc2239327c5edb3a432268e5831.omft.near',
+            default => 'nep141:sol-5ce3bf3a31af18be40ba30f721101b4341690186.omft.near',
+        };
+
+        $depositMode = $networkLower === 'stellar' ? 'MEMO' : 'SIMPLE';
+
+        $defaultRefund = match ($networkLower) {
+            'solana', 'sol' => (string) ($_ENV['SENDRA_SOLANA_REFUND_ADDRESS'] ?? getenv('SENDRA_SOLANA_REFUND_ADDRESS') ?: 'Dr2PgL5XTSjBsG8RjJE82dceaMKdxZFica3CrXbT3o8z'),
+            'stellar' => (string) ($_ENV['SENDRA_STELLAR_REFUND_ADDRESS'] ?? getenv('SENDRA_STELLAR_REFUND_ADDRESS') ?: 'GBAZ5QM4W2MGGCTWAMUN6L3MDIR2BY2JSGPZFVSGJ5ZVVVFYNPCB764U'),
+            'base', 'arbitrum', 'arb' => (string) ($_ENV['SENDRA_EVM_REFUND_ADDRESS'] ?? getenv('SENDRA_EVM_REFUND_ADDRESS') ?: '0xc0020ef44160fabaeee6ae40a26eb3760af58c3f'),
+            default => 'Dr2PgL5XTSjBsG8RjJE82dceaMKdxZFica3CrXbT3o8z',
+        };
+
+        $refund = trim($refundAddress ?? $defaultRefund);
+        if ($refund === '') {
+            $refund = $recipientAptos0x;
+        }
+
+        $deadline = $deadlineIsoUtc ?? gmdate('Y-m-d\TH:i:s\Z', time() + 50 * 60);
+
+        return [
+            'dry' => $dry,
+            'depositMode' => $depositMode,
+            'swapType' => $swapType,
+            'slippageTolerance' => (int) ($_ENV['SENDRA_ONECLICK_SLIPPAGE_BPS'] ?? getenv('SENDRA_ONECLICK_SLIPPAGE_BPS') ?: 100),
+            'originAsset' => $originAssetId,
+            'depositType' => 'ORIGIN_CHAIN',
+            'destinationAsset' => $destinationAptosAssetId,
+            'amount' => $amountSmallestOrigin,
+            'recipient' => $recipientAptos0x,
+            'recipientType' => 'DESTINATION_CHAIN',
+            'refundTo' => $refund,
+            'refundType' => 'ORIGIN_CHAIN',
+            'deadline' => $deadline,
+            'quoteWaitingTimeMs' => $quoteWaitingTimeMs ?? self::resolveConfiguredQuoteWaitMs(),
+        ];
+    }
+
+    /**
+     * Build quote body for Cross-chain (Base/Solana/Arbitrum/Aptos) → Stellar USDC (for Centiiv bank off-ramp).
+     *
+     * @return array<string, mixed>
+     */
+    public static function buildCrossChainToStellarQuoteBody(
+        string $originNetwork,
+        string $originAsset,
+        string $amountSmallestOrigin,
+        string $recipientStellarG,
+        ?string $refundAddress = null,
+        ?string $deadlineIsoUtc = null,
+        bool $dry = false,
+        ?int $quoteWaitingTimeMs = null,
+        string $swapType = 'EXACT_INPUT'
+    ): array {
+        $networkLower = strtolower(trim($originNetwork));
+        $assetUpper = strtoupper(trim($originAsset));
+
+        $originAssetId = match ($networkLower) {
+            'solana', 'sol' => $assetUpper === 'USDT'
+                ? 'nep141:sol-c800a4bd850783ccb82c2b2c7e84175443606352.omft.near'
+                : 'nep141:sol-5ce3bf3a31af18be40ba30f721101b4341690186.omft.near',
+            'stellar' => (string) ($_ENV['SENDRA_ONECLICK_STELLAR_USDC_ASSET_ID'] ?? getenv('SENDRA_ONECLICK_STELLAR_USDC_ASSET_ID') ?: 'nep245:v2_1.omni.hot.tg:1100_111bzQBB65GxAPAVoxqmMcgYo5oS3txhqs1Uh1cgahKQUeTUq1TJu'),
+            'base' => 'nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near',
+            'arbitrum', 'arb' => 'nep141:arb-0xaf88d065e77c8cc2239327c5edb3a432268e5831.omft.near',
+            default => 'nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near',
+        };
+
+        $stellarUsdcAssetId = (string) ($_ENV['SENDRA_ONECLICK_STELLAR_USDC_ASSET_ID'] ?? getenv('SENDRA_ONECLICK_STELLAR_USDC_ASSET_ID') ?: 'nep245:v2_1.omni.hot.tg:1100_111bzQBB65GxAPAVoxqmMcgYo5oS3txhqs1Uh1cgahKQUeTUq1TJu');
+
+        $depositMode = $networkLower === 'stellar' ? 'MEMO' : 'SIMPLE';
+
+        $defaultRefund = match ($networkLower) {
+            'solana', 'sol' => (string) ($_ENV['SENDRA_SOLANA_REFUND_ADDRESS'] ?? getenv('SENDRA_SOLANA_REFUND_ADDRESS') ?: 'Dr2PgL5XTSjBsG8RjJE82dceaMKdxZFica3CrXbT3o8z'),
+            'stellar' => (string) ($_ENV['SENDRA_STELLAR_REFUND_ADDRESS'] ?? getenv('SENDRA_STELLAR_REFUND_ADDRESS') ?: 'GBAZ5QM4W2MGGCTWAMUN6L3MDIR2BY2JSGPZFVSGJ5ZVVVFYNPCB764U'),
+            'base', 'arbitrum', 'arb' => (string) ($_ENV['SENDRA_EVM_REFUND_ADDRESS'] ?? getenv('SENDRA_EVM_REFUND_ADDRESS') ?: '0xc0020ef44160fabaeee6ae40a26eb3760af58c3f'),
+            default => '0xa122a6149a3af0fe2897d771242302f7145b7a66',
+        };
+
+        $refund = trim($refundAddress ?? $defaultRefund);
+        $deadline = $deadlineIsoUtc ?? gmdate('Y-m-d\TH:i:s\Z', time() + 50 * 60);
+
+        return [
+            'dry' => $dry,
+            'depositMode' => $depositMode,
+            'swapType' => $swapType,
+            'slippageTolerance' => (int) ($_ENV['SENDRA_ONECLICK_SLIPPAGE_BPS'] ?? getenv('SENDRA_ONECLICK_SLIPPAGE_BPS') ?: 100),
+            'originAsset' => $originAssetId,
+            'depositType' => 'ORIGIN_CHAIN',
+            'destinationAsset' => $stellarUsdcAssetId,
+            'amount' => $amountSmallestOrigin,
+            'recipient' => $recipientStellarG,
+            'recipientType' => 'DESTINATION_CHAIN',
+            'refundTo' => $refund,
+            'refundType' => 'ORIGIN_CHAIN',
+            'deadline' => $deadline,
             'quoteWaitingTimeMs' => $quoteWaitingTimeMs ?? self::resolveConfiguredQuoteWaitMs(),
         ];
     }
@@ -235,7 +467,7 @@ final class SendraOneClickService
 
     /**
      * @param array<string, mixed> $quoteResponse decoded JSON from /v0/quote
-     * @return array{correlation_id: ?string, deposit_address: ?string, deposit_memo: ?string, amount_in: ?string, amount_out: ?string, amount_out_formatted: ?string, signature: ?string, raw_quote: array<string, mixed>}
+     * @return array{correlation_id: ?string, deposit_address: ?string, deposit_memo: ?string, amount_in: ?string, amount_out: ?string, amount_out_formatted: ?string, min_amount_in: ?string, min_amount_out: ?string, min_amount_out_formatted: ?string, signature: ?string, raw_quote: array<string, mixed>}
      */
     public static function parseQuoteResponse(array $quoteResponse): array
     {
@@ -306,6 +538,42 @@ final class SendraOneClickService
             }
         }
 
+        $minAmountIn = null;
+        foreach ([$q['minAmountIn'] ?? null, $quoteResponse['minAmountIn'] ?? null] as $cand) {
+            if (is_string($cand) && $cand !== '') {
+                $minAmountIn = $cand;
+                break;
+            }
+            if (is_numeric($cand)) {
+                $minAmountIn = (string) $cand;
+                break;
+            }
+        }
+
+        $minAmountOut = null;
+        foreach ([$q['minAmountOut'] ?? null, $quoteResponse['minAmountOut'] ?? null] as $cand) {
+            if (is_string($cand) && $cand !== '') {
+                $minAmountOut = $cand;
+                break;
+            }
+            if (is_numeric($cand)) {
+                $minAmountOut = (string) $cand;
+                break;
+            }
+        }
+
+        $minAmountOutFormatted = null;
+        foreach ([$q['minAmountOutFormatted'] ?? null, $quoteResponse['minAmountOutFormatted'] ?? null] as $cand) {
+            if (is_string($cand) && $cand !== '') {
+                $minAmountOutFormatted = $cand;
+                break;
+            }
+            if (is_numeric($cand)) {
+                $minAmountOutFormatted = (string) $cand;
+                break;
+            }
+        }
+
         return [
             'correlation_id' => $correlationId !== '' ? $correlationId : null,
             'deposit_address' => $deposit !== '' ? $deposit : null,
@@ -313,6 +581,9 @@ final class SendraOneClickService
             'amount_in' => $amountIn,
             'amount_out' => $amountOut,
             'amount_out_formatted' => $amountOutFormatted,
+            'min_amount_in' => $minAmountIn,
+            'min_amount_out' => $minAmountOut,
+            'min_amount_out_formatted' => $minAmountOutFormatted,
             'signature' => $signature !== '' ? $signature : null,
             'raw_quote' => $quoteResponse,
         ];

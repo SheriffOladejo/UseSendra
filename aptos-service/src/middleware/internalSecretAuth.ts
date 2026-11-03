@@ -11,7 +11,7 @@ function readHeaderSecret(req: Request): string {
 }
 
 /**
- * Matches PHP {@see MessageController::aptosServiceAuthHeaders} (trimmed secret).
+ * Matches PHP {@see AptosV2\Support\AptosServiceClient::authHeaders} (trimmed secret).
  */
 export function requireInternalSecret(req: Request, res: Response, next: NextFunction): void {
   const want = (process.env.INTERNAL_API_SECRET ?? '').trim();

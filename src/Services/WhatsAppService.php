@@ -13,6 +13,11 @@ class WhatsAppService
         $this->phoneNumberId = $phoneNumberId;
     }
 
+    public function getPhoneNumberId(): string
+    {
+        return (string) $this->phoneNumberId;
+    }
+
     /**
      * Send text message
      */
@@ -88,6 +93,7 @@ class WhatsAppService
         }
 
         $url = "https://graph.facebook.com/v20.0/{$this->phoneNumberId}/media";
+        $mime = @mime_content_type($filePath) ?: 'application/octet-stream';
 
         $curl = curl_init();
 
@@ -100,12 +106,24 @@ class WhatsAppService
             ],
             CURLOPT_POSTFIELDS => [
                 'messaging_product' => 'whatsapp',
-                'file' => new \CURLFile($filePath, mime_content_type($filePath), basename($filePath))
-            ]
+                'file' => new \CURLFile($filePath, $mime, basename($filePath))
+            ],
+            // Without these, a stuck Graph media upload can hang the webhook worker
+            // forever after "Fetching live rates..." (curl ignores max_execution_time).
+            CURLOPT_CONNECTTIMEOUT => 10,
+            CURLOPT_TIMEOUT => 25,
         ]);
 
         $response = curl_exec($curl);
-        $httpCode = curl_getinfo($curl, CURLINFO_HTTP_CODE);
+        $httpCode = (int) curl_getinfo($curl, CURLINFO_HTTP_CODE);
+        if (curl_errno($curl)) {
+            $err = curl_error($curl);
+            $errno = curl_errno($curl);
+            curl_close($curl);
+            error_log("Media upload curl_error errno={$errno} err={$err}");
+
+            return false;
+        }
         curl_close($curl);
 
         if ($httpCode === 200) {
@@ -113,7 +131,7 @@ class WhatsAppService
             return $data['id'] ?? false;
         }
 
-        error_log("Media upload failed: {$response}");
+        error_log("Media upload failed HTTP {$httpCode}: {$response}");
         return false;
     }
 
@@ -183,12 +201,11 @@ class WhatsAppService
     {
         $message = "Hi 👋 *{$userName}*, I'm Sendra.\n\n" .
             "I help you send, receive and manage USDC/USDT right here on WhatsApp.\n\n" .
-            "How would you like to get started?";
+            "Tap below to create your account.";
 
         $buttons = [
             //"create_logistics_account" => "Logistics Account",
             "create_account" => "Create an Account",
-            "import_account"  => "Import Account"
         ];
 
         return $this->sendButtonMessage($to, $message, $buttons);
@@ -199,9 +216,9 @@ class WhatsAppService
         $message = "🎉 *Welcome to Sendra, $username!*\n\n" .
             "Your account has been successfully created! ✅\n\n" .
             "You can now:\n" .
-            "💰 Buy and sell USDT/USDC\n" .
-            "📤 Send and receive crypto\n" .
-            "💬 Manage everything right here on WhatsApp\n\n" .
+            "💰 Buy and sell USDT/USDC with your local currency\n" .
+            "📤 Send and receive stablecoins free and instant\n" .
+            "💬 Manage your accounts right here on WhatsApp\n\n" .
             "Type *menu* to see what you can do";
 
         return $this->sendMessage($phoneNumber, $message);
@@ -250,15 +267,22 @@ class WhatsAppService
      */
     public function sendButtonMessage($to, $bodyText, $buttons)
     {
+        if (count($buttons) > 3) {
+            // WhatsApp API permits a maximum of 3 quick-reply buttons.
+            // Automatically delegate to sendListMessage when more than 3 options are provided.
+            return $this->sendListMessage($to, $bodyText, 'Select Network', $buttons);
+        }
+
         $url = "https://graph.facebook.com/v20.0/{$this->phoneNumberId}/messages";
 
         $buttonArray = [];
         foreach ($buttons as $id => $title) {
+            $cleanTitle = mb_substr(trim((string) $title), 0, 20);
             $buttonArray[] = [
                 "type" => "reply",
                 "reply" => [
                     "id" => $id,
-                    "title" => $title
+                    "title" => $cleanTitle
                 ]
             ];
         }
@@ -481,6 +505,8 @@ class WhatsAppService
         curl_setopt($ch, CURLOPT_POST, true);
         curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 10);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 25);
 
         $response = curl_exec($ch);
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
